@@ -8,6 +8,7 @@ import asyncio
 from typing import Any
 
 from telegram import Update, ForceReply
+from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -104,8 +105,8 @@ class TelegramAdapter(BaseChannelAdapter):
             pass  # placeholder comment
             
             if message.is_stream_chunk:
-                # TODO: Implement "Typing..." or smart buffering.
-                # For now, just print to console? No, user needs to see it.
+                # Typing indicator is sent in _handle_message and _handle_stream_chunk.
+                # Smart buffering is implemented below.
                 # Robust solution:
                 # 1. On first chunk, send a "..." message.
                 # 2. Buffer chunks.
@@ -162,8 +163,10 @@ class TelegramAdapter(BaseChannelAdapter):
     async def _handle_stream_chunk(self, message: OutboundMessage) -> None:
         chat_id = message.chat_id
         content = message.content
-        
+
         if chat_id not in self._buffers:
+            # Send typing indicator before starting stream
+            await self.app.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
             # Send initial message
             sent_msg = await self.app.bot.send_message(chat_id=chat_id, text="🧠 ...")
             self._buffers[chat_id] = {
@@ -236,6 +239,12 @@ class TelegramAdapter(BaseChannelAdapter):
         # Note: Session Key for memory is typically "telegram:{chat_id}" or just "{chat_id}"
         # Bus creates defaults.
         
+        # Send typing indicator to show the bot is processing
+        await self.app.bot.send_chat_action(
+            chat_id=update.effective_chat.id,
+            action=ChatAction.TYPING
+        )
+
         msg = InboundMessage(
             channel=Channel.TELEGRAM,
             sender_id=str(user_id),
@@ -243,5 +252,5 @@ class TelegramAdapter(BaseChannelAdapter):
             content=content,
             metadata={"username": update.effective_user.username}
         )
-        
+
         await self._publish_inbound(msg)
