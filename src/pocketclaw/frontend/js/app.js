@@ -2,6 +2,14 @@
  * PocketPaw Main Application
  * Alpine.js component for the dashboard
  *
+ * Changes (2026-02-05):
+ * - Added Mission Control multi-agent orchestration UI
+ * - Added missionControl state object with agents, tasks, activities, stats
+ * - Added openMissionControl(), loadMCData(), createMCAgent(), createMCTask() methods
+ * - Added deleteMCAgent(), deleteMCTask(), viewMCTask() methods
+ * - Added filteredMCTasks getter for task filtering
+ * - Added formatMCDate() for Mission Control date formatting
+ *
  * Changes (2026-02-04):
  * - Fixed Memory UI: Added memoryLoading, memorySearch, memoryStats state
  * - Added filteredMemories getter for memory search/display
@@ -66,11 +74,27 @@ function app() {
         telegramLoading: false,
         telegramPollInterval: null,
 
+        // Mission Control state
+        showMissionControl: false,
+        missionControl: {
+            loading: false,
+            tab: 'agents',
+            taskFilter: 'all',
+            agents: [],
+            tasks: [],
+            activities: [],
+            stats: { total_agents: 0, active_tasks: 0, recent_activities: 0, total_documents: 0 },
+            showCreateAgent: false,
+            showCreateTask: false,
+            agentForm: { name: '', role: '', description: '', specialties: '' },
+            taskForm: { title: '', description: '', priority: 'medium', assignee: '', tags: '' }
+        },
+
         // Transparency Panel state
         showIdentity: false,
         identityLoading: false,
         identityData: {},
-        
+
         showMemory: false,
         memoryTab: 'sessions',  // 'sessions', 'long_term'
         sessionsList: [],       // List of all sessions
@@ -1380,6 +1404,229 @@ function app() {
             if (this.telegramPollInterval) {
                 clearInterval(this.telegramPollInterval);
                 this.telegramPollInterval = null;
+            }
+        },
+
+        // ==================== Mission Control ====================
+
+        /**
+         * Open Mission Control modal
+         */
+        async openMissionControl() {
+            this.showMissionControl = true;
+            this.missionControl.loading = true;
+            await this.loadMCData();
+            this.$nextTick(() => {
+                if (window.refreshIcons) window.refreshIcons();
+            });
+        },
+
+        /**
+         * Load Mission Control data from API
+         */
+        async loadMCData() {
+            try {
+                const [agentsRes, tasksRes, activityRes, statsRes] = await Promise.all([
+                    fetch('/api/mission-control/agents'),
+                    fetch('/api/mission-control/tasks'),
+                    fetch('/api/mission-control/activity'),
+                    fetch('/api/mission-control/stats')
+                ]);
+
+                if (agentsRes.ok) this.missionControl.agents = await agentsRes.json();
+                if (tasksRes.ok) this.missionControl.tasks = await tasksRes.json();
+                if (activityRes.ok) this.missionControl.activities = await activityRes.json();
+                if (statsRes.ok) this.missionControl.stats = await statsRes.json();
+            } catch (e) {
+                console.error('Failed to load Mission Control data:', e);
+                this.showToast('Failed to load Mission Control', 'error');
+            } finally {
+                this.missionControl.loading = false;
+            }
+        },
+
+        /**
+         * Get filtered tasks based on current filter
+         */
+        get filteredMCTasks() {
+            const filter = this.missionControl.taskFilter;
+            if (filter === 'all') return this.missionControl.tasks;
+            return this.missionControl.tasks.filter(t => t.status === filter);
+        },
+
+        /**
+         * Create a new agent
+         */
+        async createMCAgent() {
+            const form = this.missionControl.agentForm;
+            if (!form.name || !form.role) return;
+
+            try {
+                const specialties = form.specialties
+                    ? form.specialties.split(',').map(s => s.trim()).filter(s => s)
+                    : [];
+
+                const res = await fetch('/api/mission-control/agents', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: form.name,
+                        role: form.role,
+                        description: form.description,
+                        specialties: specialties
+                    })
+                });
+
+                if (res.ok) {
+                    const agent = await res.json();
+                    this.missionControl.agents.push(agent);
+                    this.missionControl.stats.total_agents++;
+                    this.missionControl.showCreateAgent = false;
+                    this.missionControl.agentForm = { name: '', role: '', description: '', specialties: '' };
+                    this.showToast('Agent created!', 'success');
+                    this.$nextTick(() => {
+                        if (window.refreshIcons) window.refreshIcons();
+                    });
+                } else {
+                    const err = await res.json();
+                    this.showToast(err.detail || 'Failed to create agent', 'error');
+                }
+            } catch (e) {
+                console.error('Failed to create agent:', e);
+                this.showToast('Failed to create agent', 'error');
+            }
+        },
+
+        /**
+         * Delete an agent
+         */
+        async deleteMCAgent(agentId) {
+            if (!confirm('Delete this agent?')) return;
+
+            try {
+                const res = await fetch(`/api/mission-control/agents/${agentId}`, {
+                    method: 'DELETE'
+                });
+
+                if (res.ok) {
+                    this.missionControl.agents = this.missionControl.agents.filter(a => a.id !== agentId);
+                    this.missionControl.stats.total_agents--;
+                    this.showToast('Agent deleted', 'info');
+                }
+            } catch (e) {
+                console.error('Failed to delete agent:', e);
+                this.showToast('Failed to delete agent', 'error');
+            }
+        },
+
+        /**
+         * Create a new task
+         */
+        async createMCTask() {
+            const form = this.missionControl.taskForm;
+            if (!form.title) return;
+
+            try {
+                const tags = form.tags
+                    ? form.tags.split(',').map(s => s.trim()).filter(s => s)
+                    : [];
+
+                const body = {
+                    title: form.title,
+                    description: form.description,
+                    priority: form.priority,
+                    tags: tags
+                };
+
+                if (form.assignee) {
+                    body.assignee_ids = [form.assignee];
+                }
+
+                const res = await fetch('/api/mission-control/tasks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                if (res.ok) {
+                    const task = await res.json();
+                    this.missionControl.tasks.unshift(task);
+                    this.missionControl.stats.active_tasks++;
+                    this.missionControl.showCreateTask = false;
+                    this.missionControl.taskForm = { title: '', description: '', priority: 'medium', assignee: '', tags: '' };
+                    this.showToast('Task created!', 'success');
+                    // Reload activity feed
+                    const activityRes = await fetch('/api/mission-control/activity');
+                    if (activityRes.ok) {
+                        this.missionControl.activities = await activityRes.json();
+                    }
+                    this.$nextTick(() => {
+                        if (window.refreshIcons) window.refreshIcons();
+                    });
+                } else {
+                    const err = await res.json();
+                    this.showToast(err.detail || 'Failed to create task', 'error');
+                }
+            } catch (e) {
+                console.error('Failed to create task:', e);
+                this.showToast('Failed to create task', 'error');
+            }
+        },
+
+        /**
+         * Delete a task
+         */
+        async deleteMCTask(taskId) {
+            if (!confirm('Delete this task?')) return;
+
+            try {
+                const res = await fetch(`/api/mission-control/tasks/${taskId}`, {
+                    method: 'DELETE'
+                });
+
+                if (res.ok) {
+                    this.missionControl.tasks = this.missionControl.tasks.filter(t => t.id !== taskId);
+                    this.missionControl.stats.active_tasks = Math.max(0, this.missionControl.stats.active_tasks - 1);
+                    this.showToast('Task deleted', 'info');
+                }
+            } catch (e) {
+                console.error('Failed to delete task:', e);
+                this.showToast('Failed to delete task', 'error');
+            }
+        },
+
+        /**
+         * View task details (could expand for full task view modal)
+         */
+        viewMCTask(task) {
+            // For now, just show a toast with task info
+            // TODO: Implement full task detail view with messages
+            this.showToast(`Task: ${task.title}\nStatus: ${task.status}`, 'info');
+        },
+
+        /**
+         * Format date for Mission Control display
+         */
+        formatMCDate(dateStr) {
+            if (!dateStr) return '';
+            try {
+                const date = new Date(dateStr);
+                const now = new Date();
+                const diff = now - date;
+
+                // Less than 1 minute ago
+                if (diff < 60000) return 'Just now';
+                // Less than 1 hour ago
+                if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+                // Less than 24 hours ago
+                if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+                // Otherwise show date
+                return date.toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric'
+                });
+            } catch (e) {
+                return dateStr;
             }
         }
     };

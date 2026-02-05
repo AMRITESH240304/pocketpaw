@@ -1,6 +1,9 @@
 <!--
   PocketPaw Dashboard - Sidebar Component
 
+  Changes (2026-02-05):
+  - Added Mission Control button in Brain section with active tasks badge
+
   Changes (2026-02-03):
   - Extracted from monolithic index.html
   - Added mobile slide-over drawer pattern with -translate-x-full/translate-x-0
@@ -67,6 +70,15 @@
   <!-- Transparency Section -->
   <nav class="flex flex-col gap-1.5">
     <h3 class="nav-title text-[11px] uppercase tracking-wider text-[var(--text-secondary)] font-semibold mb-2.5 pl-3">Brain</h3>
+    <button class="nav-item" @click="openMissionControl(); sidebarOpen = false">
+      <i data-lucide="users" class="w-5 h-5"></i>
+      <span>Mission Control</span>
+      <span
+        x-show="missionControl.stats.active_tasks > 0"
+        class="ml-auto bg-accent/20 text-accent text-xs px-2 py-0.5 rounded-full"
+        x-text="missionControl.stats.active_tasks"
+      ></span>
+    </button>
     <button class="nav-item" @click="openIdentity(); sidebarOpen = false">
       <i data-lucide="fingerprint" class="w-5 h-5"></i>
       <span>Identity</span>
