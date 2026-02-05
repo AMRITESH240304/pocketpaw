@@ -1,15 +1,22 @@
 """Mission Control API endpoints.
 
 Created: 2026-02-05
+Updated: 2026-02-05 - Added task execution endpoints (run/stop)
 FastAPI router for Mission Control operations.
 
 Provides REST endpoints for:
 - Agents: CRUD operations, heartbeat
-- Tasks: CRUD, status updates, assignment
+- Tasks: CRUD, status updates, assignment, execution (run/stop)
 - Messages: Post comments with @mentions
 - Documents: CRUD for deliverables
 - Activity: Feed and stats
 - Notifications: List and mark read/delivered
+- Execution: Run tasks with agents, stop running tasks
+
+Task Execution Endpoints:
+- POST /tasks/{id}/run - Start task execution (streams via WebSocket)
+- POST /tasks/{id}/stop - Stop running execution
+- GET /tasks/running - List currently running tasks
 
 Mount this router to your FastAPI app:
     from pocketclaw.mission_control.api import router as mission_control_router
@@ -579,3 +586,130 @@ async def mark_read(notification_id: str) -> SuccessResponse:
         raise HTTPException(status_code=404, detail="Notification not found")
 
     return SuccessResponse(message="Notification marked as read")
+
+
+# ============================================================================
+# Task Execution Endpoints
+# ============================================================================
+
+
+class RunTaskRequest(BaseModel):
+    """Request to run a task."""
+
+    agent_id: str = Field(
+        ...,
+        description="ID of the agent to execute the task",
+        min_length=36,
+        max_length=36,
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    )
+
+
+@router.post("/tasks/{task_id}/run")
+async def run_task(task_id: str, request: RunTaskRequest) -> dict[str, Any]:
+    """Start executing a task with the specified agent.
+
+    The task runs in the background. Execution events are streamed via WebSocket:
+    - mc_task_started: When execution begins
+    - mc_task_output: For each output chunk from the agent
+    - mc_task_completed: When execution ends (success/error/stopped)
+
+    Args:
+        task_id: ID of the task to execute
+        request: Contains agent_id to execute the task
+
+    Returns:
+        Status information about the execution start
+    """
+    from pocketclaw.mission_control.executor import get_mc_task_executor
+
+    manager = get_mission_control_manager()
+    executor = get_mc_task_executor()
+
+    # Validate task exists
+    task = await manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Validate agent exists
+    agent = await manager.get_agent(request.agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Check if task is already running
+    if executor.is_task_running(task_id):
+        raise HTTPException(status_code=409, detail="Task is already running")
+
+    # Start execution in background
+    await executor.execute_task_background(task_id, request.agent_id)
+
+    return {
+        "status": "started",
+        "task_id": task_id,
+        "agent_id": request.agent_id,
+        "agent_name": agent.name,
+        "message": f"Task '{task.title}' execution started with agent {agent.name}",
+    }
+
+
+@router.post("/tasks/{task_id}/stop")
+async def stop_task(task_id: str) -> dict[str, Any]:
+    """Stop a running task execution.
+
+    Args:
+        task_id: ID of the task to stop
+
+    Returns:
+        Status information about the stop operation
+    """
+    from pocketclaw.mission_control.executor import get_mc_task_executor
+
+    executor = get_mc_task_executor()
+
+    if not executor.is_task_running(task_id):
+        raise HTTPException(status_code=404, detail="Task is not currently running")
+
+    success = await executor.stop_task(task_id)
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to stop task")
+
+    return {
+        "status": "stopped",
+        "task_id": task_id,
+        "message": "Task execution stopped",
+    }
+
+
+@router.get("/tasks/running")
+async def get_running_tasks() -> dict[str, Any]:
+    """Get list of currently running task executions.
+
+    Returns:
+        List of running task IDs and their details
+    """
+    from pocketclaw.mission_control.executor import get_mc_task_executor
+
+    manager = get_mission_control_manager()
+    executor = get_mc_task_executor()
+
+    running_ids = executor.get_running_tasks()
+
+    # Fetch task details for each running task
+    running_tasks = []
+    for task_id in running_ids:
+        task = await manager.get_task(task_id)
+        if task:
+            running_tasks.append(
+                {
+                    "task_id": task_id,
+                    "title": task.title,
+                    "status": task.status.value,
+                    "assignee_ids": task.assignee_ids,
+                }
+            )
+
+    return {
+        "running_tasks": running_tasks,
+        "count": len(running_tasks),
+    }
