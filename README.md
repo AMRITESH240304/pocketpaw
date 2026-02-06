@@ -106,68 +106,27 @@ Paw:  "3 agents working on it. Agent A is scraping competitor sites,
 ## Architecture
 
 ```mermaid
-graph TD
-    %% Node Definitions
-    User(["👤 YOU <br/>(Telegram / Web)"])
-    
-    subgraph Channels ["Channel Adapters"]
-        Adapters["Telegram Bot  •  WebSocket Dashboard"]
-    end
+flowchart TB
+    User["You (Telegram / Web)"]
 
-    subgraph Messaging ["Internal Transport"]
-        Bus["<b>Message Bus</b><br/>Async Event Queue • Inbound/Outbound Routing"]
-    end
-
-    subgraph Core ["Core Intelligence"]
-        direction TB
-        subgraph AgentLoop ["Agent Loop"]
-            Context["<b>Context Builder</b><br/>Identity + Soul + Style + Memory"]
-            Router["<b>Agent Router</b>"]
-            SDKs["Claude SDK (Recommended)<br/>Open Interpreter<br/>Native"]
-            Context --> Router --> SDKs
-        end
-
-        subgraph MissionControl ["Mission Control"]
-            Orch["Multi-agent Orchestration<br/>Task Assignment & Lifecycle<br/>Heartbeat Daemon (15 min)"]
-            Stream["Live Execution Streaming<br/>Document Management<br/>Agent Status Tracking"]
-            Status["Status: INBOX ➔ ASSIGNED ➔<br/>IN_PROGRESS ➔ REVIEW ➔ DONE"]
-        end
-    end
-
-    subgraph Tools ["Tool Registry"]
-        Registry["Shell • Filesystem • Browser • Desktop • Memory • HTTP Fetch"]
-    end
-
-    subgraph Support ["Security & Routing"]
-        LLM["<b>LLM Router</b><br/>Anthropic • OpenAI • Ollama<br/>Auto-detection + Fallback"]
-        Security["<b>Security Layer (Guardian AI)</b><br/>Command Blocking • Audit Logs<br/>File Jail (Sandbox) • Panic Button"]
-    end
-
-    subgraph Memory ["Memory System"]
-        FileStore["<b>File Store</b> (Default)<br/>Markdown-based<br/>Human-readable"]
-        Mem0["<b>Mem0 Store</b> (Optional)<br/>Semantic Vector Search<br/>Fact Extraction"]
-        API["API: remember() • recall() • search() • get_context()"]
-    end
-
-    %% Connections
-    User --> Adapters
-    Adapters --> Bus
-    Bus --> AgentLoop
-    Bus --> MissionControl
-    AgentLoop --> Registry
-    Registry --> LLM
-    Registry --> Security
+    User --> Channels
+    Channels --> Bus
+    Bus --> Agent
+    Bus --> Mission
+    Agent --> Tools
+    Mission --> Tools
+    Tools --> LLM
+    Tools --> Guardian
     LLM --> Memory
-    Security -.-> Registry
 
-    %% Styling
-    classDef default font-family:arial,font-size:14px;
-    classDef highlight fill:#f9f,stroke:#333,stroke-width:2px;
-    classDef coreBox fill:#f5f7ff,stroke:#4a90e2,stroke-width:2px;
-    classDef securityBox fill:#fff5f5,stroke:#e53e3e,stroke-width:1px;
-    
-    class AgentLoop,MissionControl coreBox;
-    class Security securityBox;
+    Channels["Channel Adapters\nTelegram Bot · WebSocket Dashboard"]
+    Bus["Message Bus\nAsync Queue · Event Routing"]
+    Agent["Agent Loop\nContext Builder · Agent Router\nClaude SDK · Open Interpreter · Native"]
+    Mission["Mission Control\nMulti-Agent Orchestration · Task Lifecycle\nHeartbeat · Live Streaming · Documents"]
+    Tools["Tool Registry\nShell · Filesystem · Browser · Desktop · Memory · Fetch"]
+    LLM["LLM Router\nAnthropic · OpenAI · Ollama\nAuto-detection · Fallback Chain"]
+    Guardian["Security Layer\nGuardian AI · Audit Log · File Jail · Panic Button"]
+    Memory["Memory System\nFile Store (Markdown) · Mem0 (Vector Search)\nremember · recall · search"]
 ```
 
 ---

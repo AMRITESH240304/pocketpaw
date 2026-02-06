@@ -53,6 +53,11 @@ docs/
 # Config (contains secrets)
 .env
 .env.local
+.pocketclaw/
+config.json
+access_token
+*.secret
+*.key
 
 # Logs
 *.log
