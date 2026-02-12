@@ -394,7 +394,7 @@ class TestPlanFlow:
         # Mock _run_prompt to return canned responses for each phase
         call_count = 0
 
-        async def mock_run_prompt(prompt: str) -> str:
+        async def mock_run_prompt(prompt: str, router=None) -> str:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -458,7 +458,7 @@ class TestPlanFlow:
 
         call_count = 0
 
-        async def mock_run_prompt(prompt: str) -> str:
+        async def mock_run_prompt(prompt: str, router=None) -> str:
             nonlocal call_count
             call_count += 1
             if call_count == 1:

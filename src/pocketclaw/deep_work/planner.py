@@ -79,6 +79,12 @@ class PlannerAgent:
         Broadcasts SystemEvents for each phase so the frontend can show
         progress (e.g. spinner text).
         """
+        # Create a single AgentRouter for all phases (avoids 4x SDK init)
+        from pocketclaw.agents.router import AgentRouter
+        from pocketclaw.config import get_settings
+
+        router = AgentRouter(get_settings())
+
         # Phase 1: Research (depth controls prompt and thoroughness)
         if research_depth == "none":
             # Skip research entirely — no LLM call
@@ -92,7 +98,8 @@ class PlannerAgent:
             }
             prompt_template = research_prompts.get(research_depth, RESEARCH_PROMPT)
             research = await self._run_prompt(
-                prompt_template.format(project_description=project_description)
+                prompt_template.format(project_description=project_description),
+                router=router,
             )
 
         # Phase 2: PRD
@@ -101,7 +108,8 @@ class PlannerAgent:
             PRD_PROMPT.format(
                 project_description=project_description,
                 research_notes=research,
-            )
+            ),
+            router=router,
         )
 
         # Phase 3: Task breakdown
@@ -111,14 +119,34 @@ class PlannerAgent:
                 project_description=project_description,
                 prd_content=prd,
                 research_notes=research,
-            )
+            ),
+            router=router,
         )
         tasks = self._parse_tasks(tasks_raw)
+
+        # Retry once if task breakdown failed to parse
+        if not tasks:
+            logger.info("Retrying task breakdown with explicit JSON instruction")
+            tasks_raw = await self._run_prompt(
+                "Your previous response was not valid JSON. "
+                "Return ONLY a JSON array of task objects, no markdown, "
+                "no explanation — just the raw JSON array.\n\n"
+                + TASK_BREAKDOWN_PROMPT.format(
+                    project_description=project_description,
+                    prd_content=prd,
+                    research_notes=research,
+                ),
+                router=router,
+            )
+            tasks = self._parse_tasks(tasks_raw)
 
         # Phase 4: Team assembly
         self._broadcast_phase(project_id, "team")
         tasks_json_str = json.dumps([t.to_dict() for t in tasks], indent=2)
-        team_raw = await self._run_prompt(TEAM_ASSEMBLY_PROMPT.format(tasks_json=tasks_json_str))
+        team_raw = await self._run_prompt(
+            TEAM_ASSEMBLY_PROMPT.format(tasks_json=tasks_json_str),
+            router=router,
+        )
         team = self._parse_team(team_raw)
 
         # Split human tasks out for the result
@@ -144,13 +172,19 @@ class PlannerAgent:
             research_notes=research,
         )
 
-    async def _run_prompt(self, prompt: str) -> str:
-        """Run a prompt through AgentRouter and collect all message chunks."""
-        from pocketclaw.agents.router import AgentRouter
-        from pocketclaw.config import get_settings
+    async def _run_prompt(self, prompt: str, router=None) -> str:
+        """Run a prompt through AgentRouter and collect all message chunks.
 
-        settings = get_settings()
-        router = AgentRouter(settings)
+        Args:
+            prompt: The prompt to send to the LLM.
+            router: Optional pre-created AgentRouter (avoids re-initialization).
+        """
+        if router is None:
+            from pocketclaw.agents.router import AgentRouter
+            from pocketclaw.config import get_settings
+
+            router = AgentRouter(get_settings())
+
         output_parts: list[str] = []
 
         async for chunk in router.run(prompt):
@@ -167,17 +201,9 @@ class PlannerAgent:
         Handles markdown code fences (```json ... ```) and returns an
         empty list on parse failure.
         """
-        cleaned = self._strip_code_fences(raw)
-        try:
-            data = json.loads(cleaned)
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Failed to parse task breakdown JSON:\n%s", raw[:200])
+        data = self._parse_json_list(raw, "task breakdown")
+        if data is None:
             return []
-
-        if not isinstance(data, list):
-            logger.warning("Task breakdown JSON is not a list")
-            return []
-
         return [TaskSpec.from_dict(item) for item in data if isinstance(item, dict)]
 
     def _parse_team(self, raw: str) -> list[AgentSpec]:
@@ -185,18 +211,26 @@ class PlannerAgent:
 
         Handles markdown code fences and returns an empty list on failure.
         """
+        data = self._parse_json_list(raw, "team assembly")
+        if data is None:
+            return []
+        return [AgentSpec.from_dict(item) for item in data if isinstance(item, dict)]
+
+    def _parse_json_list(self, raw: str, label: str) -> list[dict] | None:
+        """Parse raw LLM output as a JSON list, with one retry on failure.
+
+        Returns None if parsing fails after retry.
+        """
         cleaned = self._strip_code_fences(raw)
         try:
             data = json.loads(cleaned)
+            if isinstance(data, list):
+                return data
+            logger.warning(f"{label} JSON is not a list")
+            return None
         except (json.JSONDecodeError, TypeError):
-            logger.warning("Failed to parse team assembly JSON:\n%s", raw[:200])
-            return []
-
-        if not isinstance(data, list):
-            logger.warning("Team assembly JSON is not a list")
-            return []
-
-        return [AgentSpec.from_dict(item) for item in data if isinstance(item, dict)]
+            logger.warning("Failed to parse %s JSON (will retry):\n%s", label, raw[:200])
+            return None
 
     @staticmethod
     def _strip_code_fences(text: str) -> str:
@@ -216,14 +250,19 @@ class PlannerAgent:
         This is best-effort — if the bus is not running (e.g. in tests),
         the error is silently ignored.
         """
+        phase_messages = {
+            "research": "Researching domain knowledge...",
+            "prd": "Writing product requirements...",
+            "tasks": "Breaking down into tasks...",
+            "team": "Assembling agent team...",
+        }
+        message = phase_messages.get(phase, f"Planning phase: {phase}")
+
         try:
             from pocketclaw.bus import get_message_bus
             from pocketclaw.bus.events import SystemEvent
 
             bus = get_message_bus()
-            # publish_system is async but we fire-and-forget here since
-            # _broadcast_phase is called from sync context within an async
-            # method. We use asyncio to schedule it.
             import asyncio
 
             try:
@@ -232,7 +271,11 @@ class PlannerAgent:
                     bus.publish_system(
                         SystemEvent(
                             event_type="dw_planning_phase",
-                            data={"project_id": project_id, "phase": phase},
+                            data={
+                                "project_id": project_id,
+                                "phase": phase,
+                                "message": message,
+                            },
                         )
                     )
                 )
