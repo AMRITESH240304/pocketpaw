@@ -249,6 +249,109 @@ def run_dashboard_mode(settings: Settings, host: str, port: int) -> None:
     run_dashboard(host=host, port=port, open_browser=not _is_headless())
 
 
+async def check_ollama(settings: Settings) -> int:
+    """Check Ollama connectivity, model availability, and tool calling support.
+
+    Returns 0 on success, 1 on failure.
+    """
+    import httpx
+
+    from pocketclaw.llm.client import resolve_llm_client
+
+    llm = resolve_llm_client(settings, force_provider="ollama")
+    ollama_host = llm.ollama_host
+    ollama_model = llm.model
+    failures = 0
+
+    # 1. Check server connectivity
+    print(f"\n  Checking Ollama at {ollama_host} ...")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{ollama_host}/api/tags")
+            resp.raise_for_status()
+            tags_data = resp.json()
+        models = [m.get("name", "") for m in tags_data.get("models", [])]
+        print(f"  [OK]  Server reachable — {len(models)} model(s) available")
+    except Exception as e:
+        print(f"  [FAIL] Cannot reach Ollama server: {e}")
+        print("         Make sure Ollama is running: ollama serve")
+        return 1
+
+    # 2. Check configured model is available
+    # Ollama model names may or may not include ":latest" tag
+    model_found = any(m == ollama_model or m.startswith(f"{ollama_model}:") for m in models)
+    if model_found:
+        print(f"  [OK]  Model '{ollama_model}' is available")
+    else:
+        print(f"  [WARN] Model '{ollama_model}' not found locally")
+        if models:
+            print(f"         Available: {', '.join(models[:10])}")
+        print(f"         Pull it with: ollama pull {ollama_model}")
+        failures += 1
+
+    # 3. Test Anthropic-compatible endpoint (basic completion)
+    print("  Testing Anthropic Messages API compatibility ...")
+    try:
+        ac = llm.create_anthropic_client(timeout=60.0, max_retries=1)
+        response = await ac.messages.create(
+            model=ollama_model,
+            max_tokens=32,
+            messages=[{"role": "user", "content": "Say hi"}],
+        )
+        text = response.content[0].text if response.content else ""
+        print(f"  [OK]  Messages API works — response: {text[:60]}")
+    except Exception as e:
+        print(f"  [FAIL] Messages API failed: {e}")
+        print("         Ollama v0.14.0+ is required for Anthropic API compatibility")
+        failures += 1
+        # Skip tool test if basic API fails
+        print(f"\n  Result: {2 - (1 if model_found else 0)}/3 checks passed")
+        return 1
+
+    # 4. Test tool calling
+    print("  Testing tool calling support ...")
+    try:
+        tool_response = await ac.messages.create(
+            model=ollama_model,
+            max_tokens=256,
+            messages=[{"role": "user", "content": "What is 2 + 2?"}],
+            tools=[
+                {
+                    "name": "calculator",
+                    "description": "Performs arithmetic calculations",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "expression": {
+                                "type": "string",
+                                "description": "Math expression to evaluate",
+                            }
+                        },
+                        "required": ["expression"],
+                    },
+                }
+            ],
+        )
+        has_tool_use = any(b.type == "tool_use" for b in tool_response.content)
+        if has_tool_use:
+            print("  [OK]  Tool calling works")
+        else:
+            print("  [WARN] Model responded but did not use the tool")
+            print("         Tool calling quality varies by model. Try a larger model.")
+            failures += 1
+    except Exception as e:
+        print(f"  [WARN] Tool calling test failed: {e}")
+        print("         Some models may not support tool calling reliably.")
+        failures += 1
+
+    passed = 4 - failures
+    print(f"\n  Result: {passed}/4 checks passed")
+    if failures == 0:
+        print("  Ollama is ready to use with PocketPaw!")
+        print("  Set llm_provider=ollama in settings or POCKETCLAW_LLM_PROVIDER=ollama\n")
+    return 1 if failures > 1 else 0
+
+
 def _check_extras_installed(args: argparse.Namespace) -> None:
     """Check that required optional dependencies are installed for the chosen mode.
 
@@ -267,7 +370,12 @@ def _check_extras_installed(args: argparse.Namespace) -> None:
     )
 
     # Default mode (dashboard) requires fastapi
-    if not args.telegram and not has_channel_flag and not args.security_audit:
+    if (
+        not args.telegram
+        and not has_channel_flag
+        and not args.security_audit
+        and not getattr(args, "check_ollama", False)
+    ):
         if importlib.util.find_spec("fastapi") is None:
             missing.append(("fastapi", "fastapi", "dashboard"))
         if importlib.util.find_spec("uvicorn") is None:
@@ -354,6 +462,11 @@ Examples:
         "--port", "-p", type=int, default=8888, help="Port for web server (default: 8888)"
     )
     parser.add_argument(
+        "--check-ollama",
+        action="store_true",
+        help="Check Ollama connectivity, model availability, and tool calling support",
+    )
+    parser.add_argument(
         "--version", "-v", action="version", version=f"%(prog)s {get_version('pocketpaw')}"
     )
 
@@ -386,7 +499,10 @@ Examples:
     )
 
     try:
-        if args.security_audit:
+        if args.check_ollama:
+            exit_code = asyncio.run(check_ollama(settings))
+            raise SystemExit(exit_code)
+        elif args.security_audit:
             from pocketclaw.security.audit_cli import run_security_audit
 
             exit_code = asyncio.run(run_security_audit(fix=args.fix))

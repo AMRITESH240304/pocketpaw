@@ -38,12 +38,23 @@ class AgentRouter:
 
     def _initialize_agent(self) -> None:
         """Initialize the selected agent backend."""
+        from pocketclaw.llm.client import resolve_llm_client
+
         backend = self.settings.agent_backend
 
         # Check if backend is disabled
         if backend in DISABLED_BACKENDS:
             logger.warning(f"⚠️ Backend '{backend}' disabled → using claude_agent_sdk")
             backend = "claude_agent_sdk"
+
+        # Log Ollama usage
+        llm = resolve_llm_client(self.settings)
+        if llm.is_ollama:
+            logger.info(
+                "🦙 Ollama provider detected (%s) — using %s backend with local model",
+                llm.ollama_host,
+                backend,
+            )
 
         if backend == "claude_agent_sdk":
             from pocketclaw.agents.claude_sdk import ClaudeAgentSDKWrapper
