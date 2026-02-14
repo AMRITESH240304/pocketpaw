@@ -1,6 +1,7 @@
 """PocketPaw entry point.
 
 Changes:
+  - 2026-02-14: Dashboard deps moved to core — `pip install pocketpaw` just works.
   - 2026-02-12: Fixed --version to read dynamically from package metadata.
   - 2026-02-06: Web dashboard is now the default mode (no flags needed).
   - 2026-02-06: Added --telegram flag for legacy Telegram-only mode.
@@ -256,22 +257,7 @@ def _check_extras_installed(args: argparse.Namespace) -> None:
     """
     missing: list[tuple[str, str, str]] = []  # (package, import_name, extra)
 
-    has_channel_flag = (
-        args.discord
-        or args.slack
-        or args.whatsapp
-        or getattr(args, "signal", False)
-        or getattr(args, "matrix", False)
-        or getattr(args, "teams", False)
-        or getattr(args, "gchat", False)
-    )
-
-    # Default mode (dashboard) requires fastapi
-    if not args.telegram and not has_channel_flag and not args.security_audit:
-        if importlib.util.find_spec("fastapi") is None:
-            missing.append(("fastapi", "fastapi", "dashboard"))
-        if importlib.util.find_spec("uvicorn") is None:
-            missing.append(("uvicorn", "uvicorn", "dashboard"))
+    # Dashboard deps are now in core — no need to check for them.
 
     if args.telegram:
         if importlib.util.find_spec("telegram") is None:

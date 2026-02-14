@@ -38,7 +38,7 @@ try:
 except ImportError as _exc:
     raise ImportError(
         "Dashboard dependencies (fastapi, uvicorn, qrcode, jinja2) are required "
-        "but not installed. Install them with: pip install 'pocketpaw[dashboard]'"
+        "but not installed. Reinstall with: pip install --upgrade pocketpaw"
     ) from _exc
 
 from pocketclaw.agents.loop import AgentLoop
@@ -952,7 +952,9 @@ async def install_skill(request: Request):
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             proc = await asyncio.create_subprocess_exec(
-                "git", "clone", "--depth=1",
+                "git",
+                "clone",
+                "--depth=1",
                 f"https://github.com/{owner}/{repo}.git",
                 tmpdir,
                 stdin=asyncio.subprocess.DEVNULL,
@@ -1001,7 +1003,7 @@ async def install_skill(request: Request):
             loader.reload()
             return {"status": "ok", "installed": installed}
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return JSONResponse({"error": "Clone timed out (30s)"}, status_code=504)
     except Exception as exc:
         logger.exception("Skill install failed")
