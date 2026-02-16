@@ -411,6 +411,12 @@ class Settings(BaseSettings):
     web_host: str = Field(default="127.0.0.1", description="Web server host")
     web_port: int = Field(default=8888, description="Web server port")
 
+    # MCP OAuth
+    mcp_client_metadata_url: str = Field(
+        default="",
+        description="CIMD URL for MCP OAuth (optional, for servers without dynamic registration)",
+    )
+
     # Identity / Multi-user
     owner_id: str = Field(
         default="",
@@ -553,6 +559,8 @@ class Settings(BaseSettings):
             "google_oauth_client_secret": (
                 self.google_oauth_client_secret or existing.get("google_oauth_client_secret")
             ),
+            # MCP OAuth
+            "mcp_client_metadata_url": self.mcp_client_metadata_url,
             # Voice/TTS
             "tts_provider": self.tts_provider,
             "elevenlabs_api_key": (self.elevenlabs_api_key or existing.get("elevenlabs_api_key")),

@@ -399,9 +399,19 @@ async def startup_event():
     except Exception as e:
         logger.warning("Failed to recover interrupted projects: %s", e)
 
-    # Auto-start enabled MCP servers
+    # Wire MCP OAuth broadcast + auto-start enabled MCP servers
     try:
-        from pocketpaw.mcp.manager import get_mcp_manager
+        from pocketpaw.mcp.manager import get_mcp_manager, set_ws_broadcast
+
+        async def _mcp_ws_broadcast(message: dict) -> None:
+            """Broadcast an MCP message to all connected WebSocket clients."""
+            for ws in active_connections[:]:
+                try:
+                    await ws.send_json(message)
+                except Exception:
+                    pass
+
+        set_ws_broadcast(_mcp_ws_broadcast)
 
         mcp = get_mcp_manager()
         await mcp.start_enabled_servers()
@@ -616,6 +626,7 @@ async def list_mcp_presets():
             "url": p.url,
             "docs_url": p.docs_url,
             "needs_args": p.needs_args,
+            "oauth": p.oauth,
             "installed": p.id in installed_names,
             "env_keys": [
                 {
@@ -670,244 +681,35 @@ async def install_mcp_preset(request: Request):
     }
 
 
-# ==================== MCP Registry API ====================
+@app.get("/api/mcp/oauth/callback")
+async def mcp_oauth_callback(code: str = "", state: str = ""):
+    """OAuth callback endpoint — receives authorization code from OAuth provider.
 
-_MCP_REGISTRY_BASE = "https://registry.modelcontextprotocol.io"
-
-# Server name parts that are too generic to use alone as a config name.
-_GENERIC_SERVER_PARTS = {"mcp", "server", "mcp-server", "main", "app", "api"}
-
-
-def _derive_registry_short_name(raw_name: str, title: str | None = None) -> str:
-    """Derive a short, readable config name from a registry server name.
-
-    Examples:
-        "com.zomato/mcp"      -> "zomato-mcp"
-        "acme/weather-server"  -> "weather-server"
-        "@anthropic/claude"    -> "claude"
-        "simple-tool"          -> "simple-tool"
+    This is the redirect target after user authenticates with GitHub, Notion, etc.
+    Auth-exempt because the OAuth provider redirects the user's browser here.
     """
-    if not raw_name:
-        return ""
+    from fastapi.responses import HTMLResponse
 
-    if "/" not in raw_name:
-        return raw_name
+    from pocketpaw.mcp.manager import set_oauth_callback_result
 
-    parts = raw_name.split("/")
-    org = parts[0]
-    server_part = parts[-1]
-
-    # Clean up org: "com.zomato" -> "zomato", "@anthropic" -> "anthropic"
-    if "." in org:
-        org = org.rsplit(".", 1)[-1]
-    org = org.lstrip("@")
-
-    # If the server part is too generic, combine with org for disambiguation
-    if server_part.lower() in _GENERIC_SERVER_PARTS:
-        return f"{org}-{server_part}"
-
-    return server_part
-
-
-@app.get("/api/mcp/registry/search")
-async def search_mcp_registry(
-    q: str = "",
-    limit: int = 30,
-    cursor: str = "",
-):
-    """Proxy search to the official MCP Registry (avoids CORS)."""
-    import httpx
-
-    params: dict[str, str | int] = {"limit": min(limit, 100)}
-    if q:
-        params["search"] = q
-    if cursor:
-        params["cursor"] = cursor
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                f"{_MCP_REGISTRY_BASE}/v0/servers",
-                params=params,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-            # Registry wraps each entry as {server: {...}, _meta: {...}}.
-            # Unwrap so the frontend gets flat server objects.
-            # Also: lift environmentVariables from packages[0] to server
-            # level, remove $schema ($ prefix can confuse Alpine.js proxies),
-            # and ensure expected fields have defaults.
-            servers = []
-            raw_entries = data.get("servers", [])
-            if not isinstance(raw_entries, list):
-                raw_entries = []
-
-            for entry in raw_entries:
-                if not isinstance(entry, dict):
-                    continue
-
-                raw_server = entry.get("server", entry)
-                if not isinstance(raw_server, dict):
-                    continue
-
-                srv = dict(raw_server)
-                meta = entry.get("_meta", srv.get("_meta", {}))
-                srv["_meta"] = meta if isinstance(meta, dict) else {}
-                srv.pop("$schema", None)
-
-                name = srv.get("name")
-                description = srv.get("description")
-                packages = srv.get("packages")
-                remotes = srv.get("remotes")
-                env_vars = srv.get("environmentVariables")
-
-                srv["name"] = name if isinstance(name, str) else ""
-                srv["description"] = description if isinstance(description, str) else ""
-                srv["packages"] = packages if isinstance(packages, list) else []
-                srv["remotes"] = remotes if isinstance(remotes, list) else []
-                srv["environmentVariables"] = env_vars if isinstance(env_vars, list) else []
-
-                # Lift env vars from the first package to the server level.
-                if not srv["environmentVariables"]:
-                    for pkg in srv["packages"]:
-                        if not isinstance(pkg, dict):
-                            continue
-                        pkg_env = pkg.get("environmentVariables")
-                        if isinstance(pkg_env, list) and pkg_env:
-                            srv["environmentVariables"] = pkg_env
-                            break
-
-                # Skip entries without a valid name.
-                if srv["name"]:
-                    servers.append(srv)
-
-            metadata = data.get("metadata", {})
-            if not isinstance(metadata, dict):
-                metadata = {}
-            if "nextCursor" not in metadata and "next_cursor" in metadata:
-                metadata["nextCursor"] = metadata["next_cursor"]
-            metadata.setdefault("count", len(servers))
-
-            return {"servers": servers, "metadata": metadata}
-    except Exception as exc:
-        logger.warning("MCP registry search failed: %s", exc)
-        return {"servers": [], "metadata": {"count": 0}, "error": str(exc)}
-
-
-@app.post("/api/mcp/registry/install")
-async def install_from_registry(request: Request):
-    """Install an MCP server from registry metadata.
-
-    Expects a JSON body with the server's registry data (name, packages/remotes,
-    environmentVariables) and user-supplied env values.
-    """
-    from fastapi.responses import JSONResponse
-
-    from pocketpaw.mcp.config import MCPServerConfig
-    from pocketpaw.mcp.manager import get_mcp_manager
-
-    data = await request.json()
-    server = data.get("server", {})
-    user_env = data.get("env", {})
-
-    # Derive a short, readable name from the registry name.
-    # e.g. "com.zomato/mcp" -> "zomato-mcp", "acme/weather-server" -> "weather-server"
-    raw_name = server.get("name", "")
-    short_name = _derive_registry_short_name(raw_name, server.get("title"))
-    if not short_name:
-        return JSONResponse({"error": "Missing server name"}, status_code=400)
-
-    # Try remotes first (HTTP transport — simplest, no npm needed)
-    remotes = server.get("remotes", [])
-    packages = server.get("packages", [])
-
-    config = None
-
-    if remotes:
-        remote = remotes[0]
-        # Registry API uses "type" (e.g. "streamable-http"), legacy uses "transportType"
-        transport = remote.get("type", remote.get("transportType", "http"))
-        # Normalize SSE to "http" but keep "streamable-http" distinct — they need
-        # different MCP SDK clients.
-        if transport == "sse":
-            transport = "http"
-        elif transport not in ("http", "streamable-http"):
-            transport = "http"  # safe fallback
-        config = MCPServerConfig(
-            name=short_name,
-            transport=transport,
-            url=remote.get("url", ""),
-            env=user_env,
-            enabled=True,
-        )
-    elif packages:
-        pkg = packages[0]
-        registry_type = pkg.get("registryType", "")
-        pkg_name = pkg.get("name", "") or pkg.get("identifier", "")
-        runtime = pkg.get("runtime", "node")
-
-        if registry_type == "docker":
-            args = ["run", "-i", "--rm"]
-            for ra in pkg.get("runtimeArguments", []):
-                if ra.get("isFixed"):
-                    args.append(ra.get("value", ""))
-            args.append(pkg_name)
-            config = MCPServerConfig(
-                name=short_name,
-                transport="stdio",
-                command="docker",
-                args=args,
-                env=user_env,
-                enabled=True,
-            )
-        elif registry_type == "pypi":
-            config = MCPServerConfig(
-                name=short_name,
-                transport="stdio",
-                command="uvx",
-                args=[pkg_name],
-                env=user_env,
-                enabled=True,
-            )
-        elif registry_type == "npm" or runtime == "node":
-            args = ["-y", pkg_name]
-            for pa in pkg.get("packageArguments", []):
-                if pa.get("isFixed"):
-                    args.append(pa.get("value", ""))
-            config = MCPServerConfig(
-                name=short_name,
-                transport="stdio",
-                command="npx",
-                args=args,
-                env=user_env,
-                enabled=True,
-            )
-
-    if config is None:
-        return JSONResponse(
-            {"error": "Could not determine install method from registry data"},
+    if not code or not state:
+        return HTMLResponse(
+            "<html><body><h3>Missing code or state parameter.</h3></body></html>",
             status_code=400,
         )
 
-    mgr = get_mcp_manager()
-    mgr.add_server_config(config)
-    connected = await mgr.start_server(config)
-    tools = mgr.discover_tools(config.name) if connected else []
-
-    result: dict = {
-        "status": "ok",
-        "name": config.name,
-        "connected": connected,
-        "tools": [{"name": t.name, "description": t.description} for t in tools],
-    }
-    # Surface connection error so the frontend can display it
-    if not connected:
-        status = mgr.get_server_status()
-        srv = status.get(config.name, {})
-        if srv.get("error"):
-            result["error"] = srv["error"]
-    return result
+    resolved = set_oauth_callback_result(state, code)
+    if resolved:
+        return HTMLResponse(
+            "<html><body>"
+            "<h3>Authenticated! You can close this tab.</h3>"
+            "<script>window.close()</script>"
+            "</body></html>"
+        )
+    return HTMLResponse(
+        "<html><body><h3>OAuth flow expired or not found.</h3></body></html>",
+        status_code=400,
+    )
 
 
 # ==================== Skills Library API ====================
@@ -1704,6 +1506,7 @@ async def auth_middleware(request: Request, call_next):
         "/webhook/inbound",
         "/api/whatsapp/qr",
         "/oauth/callback",
+        "/api/mcp/oauth/callback",
     ]
 
     for path in exempt_paths:
