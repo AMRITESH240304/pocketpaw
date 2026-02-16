@@ -18,6 +18,9 @@ Changes:
   - 2026-02-12: Hardened _block_dangerous_hook — wrapped in try/except to prevent
                 unhandled exceptions from tearing down the CLI stream. Updated hook
                 signature to match SDK 0.1.31 types (PreToolUseHookInput, HookContext).
+  - 2026-02-16: Fixed CLI OAuth auth bug — chat() now passes force_provider="anthropic"
+                to resolve_llm_client() so the CLI subprocess uses its own OAuth
+                credentials instead of falling back to Ollama when no API key is set.
 """
 
 import logging
@@ -644,10 +647,13 @@ class ClaudeAgentSDK:
         self._stop_flag = False
 
         try:
-            # Resolve LLM provider early — needed for routing + env
+            # Resolve LLM provider early — needed for routing + env.
+            # Force anthropic: the Claude SDK backend runs the CLI as a subprocess,
+            # which has its own OAuth credentials. Without force_provider, auto-
+            # resolution with no API key falls back to Ollama (wrong for SDK).
             from pocketpaw.llm.client import resolve_llm_client
 
-            llm = resolve_llm_client(self.settings)
+            llm = resolve_llm_client(self.settings, force_provider="anthropic")
 
             # Gemini & plain OpenAI are not compatible with Claude SDK —
             # the SDK speaks Anthropic Messages API, but Gemini/OpenAI
