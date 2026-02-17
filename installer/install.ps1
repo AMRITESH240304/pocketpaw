@@ -239,7 +239,7 @@ Write-Step "Launching interactive installer..."
 Write-Host ""
 
 # ── Run installer ──────────────────────────────────────────────────────
-$extraFlags = @("--from-git")
+$extraFlags = @()
 if ($uvAvailable) { $extraFlags += "--uv-available" }
 if ($NonInteractive) { $extraFlags += "--non-interactive" }
 if ($Profile -ne "recommended") { $extraFlags += "--profile"; $extraFlags += $Profile }
