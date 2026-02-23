@@ -10,7 +10,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
 lib64/
 parts/
 sdist/
@@ -64,9 +64,9 @@ idocs/
 temp
 
 # Client (Tauri + SvelteKit)
-client/node_modules/
+node_modules/
+.svelte-kit/
 client/build/
-client/.svelte-kit/
 client/src-tauri/target/
 client/src-tauri/gen/
 client/bun.lock
