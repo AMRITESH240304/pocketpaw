@@ -62,3 +62,11 @@ idocs/
 *.pyo
 
 temp
+
+# Client (Tauri + SvelteKit)
+client/node_modules/
+client/build/
+client/.svelte-kit/
+client/src-tauri/target/
+client/src-tauri/gen/
+client/bun.lock

@@ -1,0 +1,213 @@
+use std::sync::Mutex;
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_positioner::{Position, WindowExt};
+
+/// Managed state for the side panel's collapse/dock modes.
+pub struct SidePanelState {
+    pub collapsed: Mutex<bool>,
+    pub expanded_width: Mutex<f64>,
+    pub docked_edge: Mutex<Option<String>>,
+}
+
+impl Default for SidePanelState {
+    fn default() -> Self {
+        Self {
+            collapsed: Mutex::new(false),
+            expanded_width: Mutex::new(340.0),
+            docked_edge: Mutex::new(None),
+        }
+    }
+}
+
+/// Create or toggle the side panel window.
+#[tauri::command]
+pub fn toggle_side_panel(app: AppHandle) -> Result<(), String> {
+    if let Some(panel) = app.get_webview_window("sidepanel") {
+        // Toggle visibility
+        let visible = panel.is_visible().unwrap_or(false);
+        if visible {
+            panel.hide().map_err(|e| e.to_string())?;
+        } else {
+            panel.show().map_err(|e| e.to_string())?;
+            panel.set_focus().map_err(|e| e.to_string())?;
+        }
+    } else {
+        // Create the side panel window
+        create_side_panel(&app)?;
+    }
+    Ok(())
+}
+
+/// Show the side panel (create if needed).
+#[tauri::command]
+pub fn show_side_panel(app: AppHandle) -> Result<(), String> {
+    if let Some(panel) = app.get_webview_window("sidepanel") {
+        panel.show().map_err(|e| e.to_string())?;
+        panel.set_focus().map_err(|e| e.to_string())?;
+    } else {
+        create_side_panel(&app)?;
+    }
+    Ok(())
+}
+
+/// Hide the side panel.
+#[tauri::command]
+pub fn hide_side_panel(app: AppHandle) -> Result<(), String> {
+    if let Some(panel) = app.get_webview_window("sidepanel") {
+        panel.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Collapse the side panel to a thin strip.
+#[tauri::command]
+pub fn collapse_side_panel(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<SidePanelState>();
+
+    if let Some(panel) = app.get_webview_window("sidepanel") {
+        // Save current width before collapsing
+        if let Ok(size) = panel.inner_size() {
+            let mut w = state.expanded_width.lock().unwrap();
+            *w = size.width as f64;
+        }
+
+        panel
+            .set_size(tauri::Size::Logical(tauri::LogicalSize {
+                width: 48.0,
+                height: 600.0,
+            }))
+            .map_err(|e| e.to_string())?;
+
+        let mut collapsed = state.collapsed.lock().unwrap();
+        *collapsed = true;
+    }
+
+    Ok(())
+}
+
+/// Expand the side panel back to its previous width.
+#[tauri::command]
+pub fn expand_side_panel(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<SidePanelState>();
+
+    if let Some(panel) = app.get_webview_window("sidepanel") {
+        let w = *state.expanded_width.lock().unwrap();
+        panel
+            .set_size(tauri::Size::Logical(tauri::LogicalSize {
+                width: w,
+                height: 600.0,
+            }))
+            .map_err(|e| e.to_string())?;
+
+        let mut collapsed = state.collapsed.lock().unwrap();
+        *collapsed = false;
+    }
+
+    Ok(())
+}
+
+/// Check if the side panel is collapsed.
+#[tauri::command]
+pub fn is_side_panel_collapsed(app: AppHandle) -> bool {
+    let state = app.state::<SidePanelState>();
+    let collapsed = *state.collapsed.lock().unwrap();
+    collapsed
+}
+
+/// Dock the side panel to a screen edge.
+#[tauri::command]
+pub fn dock_side_panel(app: AppHandle, edge: String) -> Result<(), String> {
+    let state = app.state::<SidePanelState>();
+
+    if let Some(panel) = app.get_webview_window("sidepanel") {
+        let monitor = panel
+            .current_monitor()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "No monitor found".to_string())?;
+
+        let screen_size = monitor.size();
+        let screen_pos = monitor.position();
+        let scale = monitor.scale_factor();
+
+        let screen_w = screen_size.width as f64 / scale;
+        let screen_h = screen_size.height as f64 / scale;
+        let origin_x = screen_pos.x as f64 / scale;
+        let origin_y = screen_pos.y as f64 / scale;
+
+        let panel_width = if *state.collapsed.lock().unwrap() {
+            48.0
+        } else {
+            *state.expanded_width.lock().unwrap()
+        };
+
+        let x = match edge.as_str() {
+            "left" => origin_x,
+            _ => origin_x + screen_w - panel_width, // default: right
+        };
+
+        panel
+            .set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                x,
+                y: origin_y,
+            }))
+            .map_err(|e| e.to_string())?;
+
+        panel
+            .set_size(tauri::Size::Logical(tauri::LogicalSize {
+                width: panel_width,
+                height: screen_h,
+            }))
+            .map_err(|e| e.to_string())?;
+
+        let mut docked = state.docked_edge.lock().unwrap();
+        *docked = Some(edge);
+    }
+
+    Ok(())
+}
+
+pub fn create_side_panel(app: &AppHandle) -> Result<(), String> {
+    let panel_w = 340.0_f64;
+
+    let panel = WebviewWindowBuilder::new(
+        app,
+        "sidepanel",
+        WebviewUrl::App("/sidepanel".into()),
+    )
+    .title("PocketPaw")
+    .inner_size(panel_w, 600.0)
+    .min_inner_size(48.0, 400.0)
+    .always_on_top(true)
+    .decorations(false)
+    .transparent(true)
+    .resizable(true)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    // Apply native vibrancy effect
+    crate::vibrancy::apply_native_effect(&panel, None);
+
+    // Position at right edge, full screen height
+    if let Ok(Some(monitor)) = panel.current_monitor() {
+        let scale = monitor.scale_factor();
+        let screen_w = monitor.size().width as f64 / scale;
+        let screen_h = monitor.size().height as f64 / scale;
+        let origin_x = monitor.position().x as f64 / scale;
+        let origin_y = monitor.position().y as f64 / scale;
+
+        let _ = panel.set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: panel_w,
+            height: screen_h,
+        }));
+        let _ = panel.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+            x: origin_x + screen_w - panel_w,
+            y: origin_y,
+        }));
+    } else {
+        // Fallback: use positioner plugin
+        let _ = panel.as_ref().window().move_window(Position::RightCenter);
+    }
+
+    Ok(())
+}
