@@ -73,9 +73,6 @@ pub fn open_oauth_window(app: AppHandle, authorize_url: String) -> Result<(), St
 
     // Validate the URL before proceeding
     let _ = Url::parse(&authorize_url).map_err(|e| format!("Invalid URL: {}", e))?;
-    let external_url: tauri::Url = authorize_url
-        .parse()
-        .map_err(|e| format!("URL parse error: {}", e))?;
 
     let callback_handled = Arc::new(AtomicBool::new(false));
     let callback_handled_nav = callback_handled.clone();
@@ -84,54 +81,69 @@ pub fn open_oauth_window(app: AppHandle, authorize_url: String) -> Result<(), St
     let app_handle = app.clone();
     let app_for_close = app.clone();
 
-    let win = WebviewWindowBuilder::new(&app, "oauth", WebviewUrl::External(external_url))
-        .title("Sign in to PocketPaw")
-        .inner_size(500.0, 700.0)
-        .center()
-        .resizable(true)
-        .on_navigation(move |url| {
-            let url_str = url.as_str();
+    // Load a local loading page first, then navigate to the OAuth URL via JS.
+    // Using WebviewUrl::External directly can result in a white screen on Windows
+    // because WebView2 may not be fully initialized before the navigation starts.
+    let win = WebviewWindowBuilder::new(
+        &app,
+        "oauth",
+        WebviewUrl::App("/oauth-loading.html".into()),
+    )
+    .title("Sign in to PocketPaw")
+    .inner_size(500.0, 700.0)
+    .center()
+    .resizable(true)
+    .on_navigation(move |url| {
+        let url_str = url.as_str();
 
-            // Already handled — block further navigations to prevent loops
-            if callback_handled_nav.load(Ordering::SeqCst) {
-                return false;
-            }
+        // Already handled — block further navigations to prevent loops
+        if callback_handled_nav.load(Ordering::SeqCst) {
+            return false;
+        }
 
-            // Check if this is our redirect URL
-            if let Ok(nav_url) = Url::parse(url_str) {
-                if nav_url.host_str() == Some(REDIRECT_HOST)
-                    && nav_url.path() == REDIRECT_PATH
-                {
-                    let mut code = None;
-                    let mut state = None;
-                    for (key, value) in nav_url.query_pairs() {
-                        match key.as_ref() {
-                            "code" => code = Some(value.to_string()),
-                            "state" => state = Some(value.to_string()),
-                            _ => {}
-                        }
+        // Check if this is our redirect URL
+        if let Ok(nav_url) = Url::parse(url_str) {
+            if nav_url.host_str() == Some(REDIRECT_HOST)
+                && nav_url.path() == REDIRECT_PATH
+            {
+                let mut code = None;
+                let mut state = None;
+                for (key, value) in nav_url.query_pairs() {
+                    match key.as_ref() {
+                        "code" => code = Some(value.to_string()),
+                        "state" => state = Some(value.to_string()),
+                        _ => {}
                     }
-
-                    if let (Some(code), Some(state)) = (code, state) {
-                        callback_handled_nav.store(true, Ordering::SeqCst);
-                        let _ = app_handle
-                            .emit("oauth-callback", OAuthCallbackPayload { code, state });
-
-                        if let Some(win) = app_handle.get_webview_window("oauth") {
-                            let _ = win.close();
-                        }
-                    }
-
-                    // Allow the navigation through — the SvelteKit callback page
-                    // acts as a fallback if the emit/close doesn't complete in time
-                    return true;
                 }
-            }
 
-            true
-        })
-        .build()
-        .map_err(|e| e.to_string())?;
+                if let (Some(code), Some(state)) = (code, state) {
+                    callback_handled_nav.store(true, Ordering::SeqCst);
+                    let _ = app_handle
+                        .emit("oauth-callback", OAuthCallbackPayload { code, state });
+
+                    if let Some(win) = app_handle.get_webview_window("oauth") {
+                        let _ = win.close();
+                    }
+                }
+
+                // Allow the navigation through — the SvelteKit callback page
+                // acts as a fallback if the emit/close doesn't complete in time
+                return true;
+            }
+        }
+
+        true
+    })
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    // Navigate to the OAuth URL after the local loading page is ready.
+    // WebView2 queues eval() to run after the current page finishes loading,
+    // so the user sees "Loading sign-in..." first, then gets redirected.
+    let js_safe_url = authorize_url
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'");
+    let _ = win.eval(&format!("window.location.href='{}';", js_safe_url));
 
     // Only emit cancelled if the callback wasn't already handled
     win.on_window_event(move |event| {
