@@ -2818,7 +2818,6 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-os",
  "tauri-plugin-positioner",
- "url",
  "window-vibrancy 0.7.1",
 ]
 

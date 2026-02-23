@@ -3,7 +3,7 @@
   "identifier": "default",
   "description": "Capability for the main and side panel windows (desktop only)",
   "platforms": ["linux", "macOS", "windows"],
-  "windows": ["main", "sidepanel", "oauth"],
+  "windows": ["main", "sidepanel", "quickask"],
   "permissions": [
     "core:default",
     "core:window:default",

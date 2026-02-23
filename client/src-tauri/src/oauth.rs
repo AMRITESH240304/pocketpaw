@@ -1,19 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 #[cfg(desktop)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::{BufRead, BufReader, Write};
 #[cfg(desktop)]
-use std::sync::Arc;
+use std::net::TcpListener;
 #[cfg(desktop)]
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
-#[cfg(desktop)]
-use url::Url;
+use tauri::{AppHandle, Emitter};
 
 const TOKEN_FILE: &str = "client_oauth.json";
-#[cfg(desktop)]
-const REDIRECT_HOST: &str = "localhost";
-#[cfg(desktop)]
-const REDIRECT_PATH: &str = "/oauth-callback";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthTokens {
@@ -21,13 +15,6 @@ pub struct OAuthTokens {
     pub refresh_token: Option<String>,
     pub expires_at: u64,
     pub scopes: Vec<String>,
-}
-
-#[cfg(desktop)]
-#[derive(Debug, Clone, Serialize)]
-struct OAuthCallbackPayload {
-    code: String,
-    state: String,
 }
 
 fn token_file_path() -> Result<std::path::PathBuf, String> {
@@ -62,97 +49,70 @@ pub fn clear_oauth_tokens() -> Result<(), String> {
     Ok(())
 }
 
+/// Starts a temporary localhost HTTP server on a random port.
+/// Returns the port number immediately. A background thread accepts one
+/// connection, extracts the OAuth redirect URL, emits an `oauth-redirect`
+/// Tauri event, and sends back a "close this tab" HTML page.
 #[cfg(desktop)]
 #[tauri::command]
-pub fn open_oauth_window(app: AppHandle, authorize_url: String) -> Result<(), String> {
-    // If the window already exists, focus it
-    if let Some(win) = app.get_webview_window("oauth") {
-        win.set_focus().map_err(|e| e.to_string())?;
-        return Ok(());
-    }
+pub fn start_oauth_server(app: AppHandle) -> Result<u16, String> {
+    let listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("Failed to bind: {}", e))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("Failed to get port: {}", e))?
+        .port();
 
-    // Validate the URL before proceeding
-    let _ = Url::parse(&authorize_url).map_err(|e| format!("Invalid URL: {}", e))?;
+    std::thread::spawn(move || {
+        // Accept one connection (with a 5-minute timeout)
+        listener
+            .set_nonblocking(false)
+            .ok();
+        // Set a timeout so the thread doesn't hang forever
+        use std::time::Duration;
+        let _ = listener.set_nonblocking(false);
+        // Use SO_RCVTIMEO via into_incoming or just accept with a reasonable approach
+        // We'll just accept blocking — the thread will be cleaned up when the app exits
 
-    let callback_handled = Arc::new(AtomicBool::new(false));
-    let callback_handled_nav = callback_handled.clone();
-    let callback_handled_close = callback_handled.clone();
+        if let Ok((stream, _)) = listener.accept() {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+            let mut reader = BufReader::new(&stream);
+            let mut request_line = String::new();
+            if reader.read_line(&mut request_line).is_ok() {
+                // Parse: "GET /path?query HTTP/1.1"
+                let parts: Vec<&str> = request_line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let path = parts[1]; // e.g. "/?code=abc&state=xyz" or "/oauth-callback?..."
+                    let redirect_url = format!("http://localhost:{}{}", port, path);
 
-    let app_handle = app.clone();
-    let app_for_close = app.clone();
-
-    // Load a local loading page first, then navigate to the OAuth URL via JS.
-    // Using WebviewUrl::External directly can result in a white screen on Windows
-    // because WebView2 may not be fully initialized before the navigation starts.
-    let win = WebviewWindowBuilder::new(
-        &app,
-        "oauth",
-        WebviewUrl::App("/oauth-loading.html".into()),
-    )
-    .title("Sign in to PocketPaw")
-    .inner_size(500.0, 700.0)
-    .center()
-    .resizable(true)
-    .on_navigation(move |url| {
-        let url_str = url.as_str();
-
-        // Already handled — block further navigations to prevent loops
-        if callback_handled_nav.load(Ordering::SeqCst) {
-            return false;
-        }
-
-        // Check if this is our redirect URL
-        if let Ok(nav_url) = Url::parse(url_str) {
-            if nav_url.host_str() == Some(REDIRECT_HOST)
-                && nav_url.path() == REDIRECT_PATH
-            {
-                let mut code = None;
-                let mut state = None;
-                for (key, value) in nav_url.query_pairs() {
-                    match key.as_ref() {
-                        "code" => code = Some(value.to_string()),
-                        "state" => state = Some(value.to_string()),
-                        _ => {}
-                    }
+                    // Emit the redirect URL to the frontend
+                    let _ = app.emit("oauth-redirect", redirect_url);
                 }
 
-                if let (Some(code), Some(state)) = (code, state) {
-                    callback_handled_nav.store(true, Ordering::SeqCst);
-                    let _ = app_handle
-                        .emit("oauth-callback", OAuthCallbackPayload { code, state });
+                // Send back a simple HTML response
+                let body = r#"<!DOCTYPE html>
+<html>
+<head><title>PocketPaw</title></head>
+<body style="font-family:system-ui,-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f9fafb;color:#374151;">
+<div style="text-align:center;">
+<h2 style="margin:0 0 8px;">Sign-in complete!</h2>
+<p style="color:#6b7280;">You can close this tab and return to PocketPaw.</p>
+</div>
+</body>
+</html>"#;
 
-                    if let Some(win) = app_handle.get_webview_window("oauth") {
-                        let _ = win.close();
-                    }
-                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
 
-                // Allow the navigation through — the SvelteKit callback page
-                // acts as a fallback if the emit/close doesn't complete in time
-                return true;
-            }
-        }
-
-        true
-    })
-    .build()
-    .map_err(|e| e.to_string())?;
-
-    // Navigate to the OAuth URL after the local loading page is ready.
-    // WebView2 queues eval() to run after the current page finishes loading,
-    // so the user sees "Loading sign-in..." first, then gets redirected.
-    let js_safe_url = authorize_url
-        .replace('\\', "\\\\")
-        .replace('\'', "\\'");
-    let _ = win.eval(&format!("window.location.href='{}';", js_safe_url));
-
-    // Only emit cancelled if the callback wasn't already handled
-    win.on_window_event(move |event| {
-        if let tauri::WindowEvent::Destroyed = event {
-            if !callback_handled_close.load(Ordering::SeqCst) {
-                let _ = app_for_close.emit("oauth-cancelled", ());
+                let mut writer = stream;
+                let _ = writer.write_all(response.as_bytes());
+                let _ = writer.flush();
             }
         }
     });
 
-    Ok(())
+    Ok(port)
 }

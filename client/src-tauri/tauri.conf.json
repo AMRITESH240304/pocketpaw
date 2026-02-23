@@ -21,6 +21,35 @@
         "minHeight": 400,
         "decorations": false,
         "transparent": true
+      },
+      {
+        "title": "PocketPaw",
+        "label": "sidepanel",
+        "url": "/sidepanel",
+        "width": 340,
+        "height": 600,
+        "minWidth": 48,
+        "minHeight": 400,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": true
+      },
+      {
+        "title": "Quick Ask",
+        "label": "quickask",
+        "url": "/quickask",
+        "width": 600,
+        "height": 120,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "center": true
       }
     ],
     "security": {

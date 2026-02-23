@@ -1,10 +1,9 @@
-// Orchestrates the full OAuth 2.0 PKCE flow
+// Orchestrates the full OAuth 2.0 PKCE flow using system browser + localhost callback server
 
 import { generateCodeVerifier, generateCodeChallenge, generateState } from "./pkce";
 import { saveTokens, clearTokens, type OAuthTokens } from "./token-store";
 import { API_BASE } from "$lib/api/config";
 const CLIENT_ID = "pocketpaw-desktop";
-const REDIRECT_URI = "http://localhost:1420/oauth-callback";
 const SCOPES = "admin";
 const FLOW_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -19,29 +18,36 @@ export async function startOAuthFlow(): Promise<OAuthResult> {
   const challenge = await generateCodeChallenge(verifier);
   const state = generateState();
 
+  const { listen } = await import("@tauri-apps/api/event");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const { openUrl } = await import("@tauri-apps/plugin-opener");
+
+  // Start the temporary localhost server and get the port
+  let port: number;
+  try {
+    port = await invoke<number>("start_oauth_server");
+  } catch (err) {
+    return { success: false, error: `Failed to start OAuth server: ${err}` };
+  }
+
+  const redirectUri = `http://localhost:${port}`;
+
   const authorizeUrl = new URL(`${API_BASE}/oauth/authorize`);
   authorizeUrl.searchParams.set("client_id", CLIENT_ID);
-  authorizeUrl.searchParams.set("redirect_uri", REDIRECT_URI);
+  authorizeUrl.searchParams.set("redirect_uri", redirectUri);
   authorizeUrl.searchParams.set("response_type", "code");
   authorizeUrl.searchParams.set("scope", SCOPES);
   authorizeUrl.searchParams.set("code_challenge", challenge);
   authorizeUrl.searchParams.set("code_challenge_method", "S256");
   authorizeUrl.searchParams.set("state", state);
 
-  const { listen } = await import("@tauri-apps/api/event");
-  const { invoke } = await import("@tauri-apps/api/core");
-
   return new Promise<OAuthResult>((resolve) => {
     let settled = false;
-    let unlistenCallback: (() => void) | null = null;
-    let unlistenCancelled: (() => void) | null = null;
-    let unlistenError: (() => void) | null = null;
+    let unlistenRedirect: (() => void) | null = null;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     function cleanup() {
-      unlistenCallback?.();
-      unlistenCancelled?.();
-      unlistenError?.();
+      unlistenRedirect?.();
       if (timeoutId) clearTimeout(timeoutId);
     }
 
@@ -57,55 +63,52 @@ export async function startOAuthFlow(): Promise<OAuthResult> {
       settle({ success: false, error: "Sign-in timed out. Please try again." });
     }, FLOW_TIMEOUT_MS);
 
-    // Listen for callback event — emitted by either:
-    // 1. Rust on_navigation (fast path, if it fires for 302 redirects)
-    // 2. /oauth-callback SvelteKit route (reliable fallback)
-    listen<{ code: string; state: string }>("oauth-callback", async (event) => {
-      const { code, state: returnedState } = event.payload;
-
-      // Mark settled immediately to prevent oauth-cancelled from racing
+    // Listen for the redirect URL from the Rust localhost server
+    listen<string>("oauth-redirect", async (event) => {
       if (settled) return;
-      settled = true;
-      cleanup();
-
-      if (returnedState !== state) {
-        resolve({ success: false, error: "State mismatch — possible CSRF attack." });
-        return;
-      }
 
       try {
-        const tokens = await exchangeCodeForTokens(code, verifier);
+        const callbackUrl = new URL(event.payload);
+        const code = callbackUrl.searchParams.get("code");
+        const returnedState = callbackUrl.searchParams.get("state");
+
+        if (!code) {
+          const error = callbackUrl.searchParams.get("error") || "No authorization code received.";
+          settle({ success: false, error });
+          return;
+        }
+
+        if (returnedState !== state) {
+          settle({ success: false, error: "State mismatch — possible CSRF attack." });
+          return;
+        }
+
+        // Mark settled before async work to prevent races
+        settled = true;
+        cleanup();
+
+        const tokens = await exchangeCodeForTokens(code, verifier, redirectUri);
         await saveTokens(tokens);
         resolve({ success: true, tokens });
       } catch (err) {
-        resolve({ success: false, error: `Token exchange failed: ${err}` });
+        settle({ success: false, error: `Token exchange failed: ${err}` });
       }
     }).then((unlisten) => {
-      unlistenCallback = unlisten;
+      unlistenRedirect = unlisten;
     });
 
-    // Listen for error from the callback route (e.g. access_denied)
-    listen<{ error: string }>("oauth-callback-error", (event) => {
-      settle({ success: false, error: event.payload.error });
-    }).then((unlisten) => {
-      unlistenError = unlisten;
-    });
-
-    // Listen for user closing the OAuth window
-    listen("oauth-cancelled", () => {
-      settle({ success: false, error: "Sign-in was cancelled." });
-    }).then((unlisten) => {
-      unlistenCancelled = unlisten;
-    });
-
-    // Open the OAuth consent window
-    invoke("open_oauth_window", { authorizeUrl: authorizeUrl.toString() }).catch((err) => {
-      settle({ success: false, error: `Failed to open sign-in window: ${err}` });
+    // Open the OAuth URL in the system browser
+    openUrl(authorizeUrl.toString()).catch((err) => {
+      settle({ success: false, error: `Failed to open browser: ${err}` });
     });
   });
 }
 
-async function exchangeCodeForTokens(code: string, codeVerifier: string): Promise<OAuthTokens> {
+async function exchangeCodeForTokens(
+  code: string,
+  codeVerifier: string,
+  redirectUri: string,
+): Promise<OAuthTokens> {
   const res = await fetch(`${API_BASE}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -114,7 +117,7 @@ async function exchangeCodeForTokens(code: string, codeVerifier: string): Promis
       code,
       code_verifier: codeVerifier,
       client_id: CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: redirectUri,
     }),
   });
 

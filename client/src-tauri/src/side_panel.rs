@@ -1,5 +1,5 @@
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_positioner::{Position, WindowExt};
 
 /// Managed state for the side panel's collapse/dock modes.
@@ -23,17 +23,14 @@ impl Default for SidePanelState {
 #[tauri::command]
 pub fn toggle_side_panel(app: AppHandle) -> Result<(), String> {
     if let Some(panel) = app.get_webview_window("sidepanel") {
-        // Toggle visibility
         let visible = panel.is_visible().unwrap_or(false);
         if visible {
             panel.hide().map_err(|e| e.to_string())?;
         } else {
+            position_side_panel(&app, &panel)?;
             panel.show().map_err(|e| e.to_string())?;
             panel.set_focus().map_err(|e| e.to_string())?;
         }
-    } else {
-        // Create the side panel window
-        create_side_panel(&app)?;
     }
     Ok(())
 }
@@ -42,10 +39,9 @@ pub fn toggle_side_panel(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn show_side_panel(app: AppHandle) -> Result<(), String> {
     if let Some(panel) = app.get_webview_window("sidepanel") {
+        position_side_panel(&app, &panel)?;
         panel.show().map_err(|e| e.to_string())?;
         panel.set_focus().map_err(|e| e.to_string())?;
-    } else {
-        create_side_panel(&app)?;
     }
     Ok(())
 }
@@ -166,29 +162,18 @@ pub fn dock_side_panel(app: AppHandle, edge: String) -> Result<(), String> {
     Ok(())
 }
 
-pub fn create_side_panel(app: &AppHandle) -> Result<(), String> {
-    let panel_w = 340.0_f64;
+/// Position the side panel at the right edge of the screen, full height.
+fn position_side_panel(
+    app: &AppHandle,
+    panel: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    let state = app.state::<SidePanelState>();
+    let panel_w = if *state.collapsed.lock().unwrap() {
+        48.0
+    } else {
+        *state.expanded_width.lock().unwrap()
+    };
 
-    let panel = WebviewWindowBuilder::new(
-        app,
-        "sidepanel",
-        WebviewUrl::App("/sidepanel".into()),
-    )
-    .title("PocketPaw")
-    .inner_size(panel_w, 600.0)
-    .min_inner_size(48.0, 400.0)
-    .always_on_top(true)
-    .decorations(false)
-    .transparent(true)
-    .resizable(true)
-    .skip_taskbar(true)
-    .build()
-    .map_err(|e| e.to_string())?;
-
-    // Apply native vibrancy effect
-    crate::vibrancy::apply_native_effect(&panel, None);
-
-    // Position at right edge, full screen height
     if let Ok(Some(monitor)) = panel.current_monitor() {
         let scale = monitor.scale_factor();
         let screen_w = monitor.size().width as f64 / scale;
@@ -205,7 +190,6 @@ pub fn create_side_panel(app: &AppHandle) -> Result<(), String> {
             y: origin_y,
         }));
     } else {
-        // Fallback: use positioner plugin
         let _ = panel.as_ref().window().move_window(Position::RightCenter);
     }
 

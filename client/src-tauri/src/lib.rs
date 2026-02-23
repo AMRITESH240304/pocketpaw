@@ -61,7 +61,7 @@ pub fn run() {
             oauth::save_oauth_tokens,
             oauth::clear_oauth_tokens,
             #[cfg(desktop)]
-            oauth::open_oauth_window,
+            oauth::start_oauth_server,
             #[cfg(desktop)]
             side_panel::toggle_side_panel,
             #[cfg(desktop)]
@@ -99,7 +99,7 @@ pub fn run() {
 
                 let window = _app.get_webview_window("main").unwrap();
 
-                // Apply native vibrancy/mica/acrylic effect
+                // Apply native vibrancy/mica/acrylic to all pre-created windows
                 let effect = vibrancy::apply_native_effect(&window, None);
                 *_app
                     .state::<vibrancy::ActiveEffect>()
@@ -107,6 +107,12 @@ pub fn run() {
                     .lock()
                     .unwrap() = effect;
                 let _ = window.emit("native-effect", effect);
+
+                for label in ["sidepanel", "quickask"] {
+                    if let Some(win) = _app.get_webview_window(label) {
+                        vibrancy::apply_native_effect(&win, None);
+                    }
+                }
 
                 let window_clone = window.clone();
                 window.on_window_event(move |event| {
