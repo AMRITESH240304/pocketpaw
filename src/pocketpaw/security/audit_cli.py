@@ -18,8 +18,10 @@ def _check_config_permissions() -> tuple[bool, str, bool]:
     if not config_path.exists():
         return True, "Config file does not exist yet (OK)", False
 
-    # On Windows, S_IROTH/S_IRGRP are always 0, giving a false positive.
-    # NTFS ACLs handle permissions; skip the Unix-style check.
+    # On Windows, Python's stat() simulates Unix mode bits from the read-only
+    # attribute — S_IROTH/S_IRGRP are always non-zero (0o666), which would
+    # incorrectly flag every config file as world-readable.
+    # NTFS ACLs handle real permissions; skip the Unix-style check.
     if sys.platform == "win32":
         return True, "File permissions check skipped on Windows (use NTFS ACLs)", False
 
