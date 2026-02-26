@@ -444,7 +444,10 @@ async def websocket_handler(
                 provider = data.get("provider")
                 key = data.get("key", "")
 
-                # Map provider names to field names for validation
+                # Map provider names to field names for validation.
+                # Note: Some providers (google, tavily, brave, exa, openrouter, etc.) don't
+                # have format validation patterns in _API_KEY_PATTERNS yet and will pass through.
+                # Patterns can be added in config.py as needed.
                 provider_to_field = {
                     "anthropic": "anthropic_api_key",
                     "openai": "openai_api_key",
