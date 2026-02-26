@@ -690,7 +690,7 @@ async def websocket_handler(
                 else:
                     await websocket.send_json(
                         {
-                            "type": "error",
+                            "type": "reminder_error",
                             "content": (
                                 "Could not parse time from message. Try 'in 5 minutes' or 'at 3pm'"
                             ),
