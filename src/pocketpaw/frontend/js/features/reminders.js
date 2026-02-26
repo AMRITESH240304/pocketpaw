@@ -55,9 +55,9 @@ window.PocketPaw.Reminders = {
             handleReminderDeleted(data) {
                 this.reminders = this.reminders.filter(r => r.id !== data.id);
             },
-            
+
             /**
-                * Handle reminder error
+             * Handle reminder error
              */
             handleReminderError(data) {
                 this.reminderLoading = false;
