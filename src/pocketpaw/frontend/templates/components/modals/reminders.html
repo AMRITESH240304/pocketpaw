@@ -60,7 +60,7 @@ x-transition.opacity
                 <p class="font-medium text-[14px] truncate" x-text="reminder.text"></p>
                 <p class="text-xs text-white/50 mt-0.5">
                     <span x-text="formatReminderTime(reminder)"></span>
-                    <span class="text-[var(--accent-color)] ml-2" x-text="reminder.time_remaining"></span>
+                    <span class="text-[var(--accent-color)] ml-2" x-text="calculateTimeRemaining(reminder)"></span>
                 </p>
                 </div>
                 <button

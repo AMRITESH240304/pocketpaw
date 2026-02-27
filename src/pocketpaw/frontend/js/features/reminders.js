@@ -22,7 +22,9 @@ window.PocketPaw.Reminders = {
             showReminders: false,
             reminders: [],
             reminderInput: '',
-            reminderLoading: false
+            reminderLoading: false,
+            reminderIntervalId: null,
+            countdownTick: 0
         };
     },
 
@@ -89,9 +91,62 @@ window.PocketPaw.Reminders = {
                     Notification.requestPermission();
                 }
 
+                // Start live countdown updates
+                this.startReminderCountdown();
+
                 this.$nextTick(() => {
                     if (window.refreshIcons) window.refreshIcons();
                 });
+            },
+
+            /**
+             * Start live countdown timer
+             */
+            startReminderCountdown() {
+                if (this.reminderIntervalId) {
+                    clearInterval(this.reminderIntervalId);
+                }
+
+                // Update countdown every second
+                this.reminderIntervalId = setInterval(() => {
+                    if (!this.showReminders) {
+                        clearInterval(this.reminderIntervalId);
+                        this.reminderIntervalId = null;
+                        return;
+                    }
+
+                    this.countdownTick++;
+                }, 1000);
+            },
+
+            /**
+             * Calculate time remaining for a reminder (live countdown)
+             */
+            calculateTimeRemaining(reminder) {
+                this.countdownTick;
+
+                const now = new Date();
+                const triggerTime = new Date(reminder.trigger_at);
+                const diff = triggerTime - now;
+
+                if (diff <= 0) {
+                    return 'now';
+                }
+
+                const seconds = Math.floor(diff / 1000);
+                const minutes = Math.floor(seconds / 60);
+                const hours = Math.floor(minutes / 60);
+                const days = Math.floor(hours / 24);
+
+                if (days > 0) {
+                    return `in ${days}d ${hours % 24}h ${minutes % 60}m ${seconds % 60}s`;
+                } else if (hours > 0) {
+                    return `in ${hours}h ${minutes % 60}m ${seconds % 60}s`;
+                } else if (minutes > 0) {
+                    return `in ${minutes}m ${seconds % 60}s`;
+                } else {
+                    return `in ${seconds}s`;
+                }
             },
 
             /**
