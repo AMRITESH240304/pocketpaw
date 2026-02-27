@@ -23,7 +23,7 @@ window.PocketPaw.Reminders = {
             reminders: [],
             reminderInput: '',
             reminderLoading: false,
-            reminderIntervalId: null,
+            _reminderCountdownTimer: null,
             countdownTick: 0
         };
     },
@@ -92,7 +92,7 @@ window.PocketPaw.Reminders = {
                 }
 
                 // Start live countdown updates
-                this.startReminderCountdown();
+                this._startReminderCountdown();
 
                 this.$nextTick(() => {
                     if (window.refreshIcons) window.refreshIcons();
@@ -102,51 +102,66 @@ window.PocketPaw.Reminders = {
             /**
              * Start live countdown timer
              */
-            startReminderCountdown() {
-                if (this.reminderIntervalId) {
-                    clearInterval(this.reminderIntervalId);
-                }
-
-                // Update countdown every second
-                this.reminderIntervalId = setInterval(() => {
-                    if (!this.showReminders) {
-                        clearInterval(this.reminderIntervalId);
-                        this.reminderIntervalId = null;
-                        return;
-                    }
-
+            _startReminderCountdown() {
+                this._stopReminderCountdown();
+                this._reminderCountdownTimer = setInterval(() => {
                     this.countdownTick++;
                 }, 1000);
             },
 
             /**
-             * Calculate time remaining for a reminder (live countdown)
+             * Stop live countdown timer
+             */
+            _stopReminderCountdown() {
+                if (this._reminderCountdownTimer) {
+                    clearInterval(this._reminderCountdownTimer);
+                    this._reminderCountdownTimer = null;
+                }
+            },
+
+            /**
+             * Close reminders panel and clean up interval
+             */
+            closeReminders() {
+                this._stopReminderCountdown();
+                this.showReminders = false;
+            },
+
+            /**
+             * Calculate time remaining for a reminder (live countdown).
+             * Reads countdownTick to establish an Alpine.js reactive dependency
+             * so this expression re-evaluates every second.
              */
             calculateTimeRemaining(reminder) {
-                this.countdownTick;
+                const _tick = this.countdownTick; void _tick;
 
                 const now = new Date();
                 const triggerTime = new Date(reminder.trigger_at);
                 const diff = triggerTime - now;
 
                 if (diff <= 0) {
-                    return 'now';
+                    return 'past';
                 }
 
-                const seconds = Math.floor(diff / 1000);
-                const minutes = Math.floor(seconds / 60);
-                const hours = Math.floor(minutes / 60);
-                const days = Math.floor(hours / 24);
-
-                if (days > 0) {
-                    return `in ${days}d ${hours % 24}h ${minutes % 60}m ${seconds % 60}s`;
-                } else if (hours > 0) {
-                    return `in ${hours}h ${minutes % 60}m ${seconds % 60}s`;
-                } else if (minutes > 0) {
-                    return `in ${minutes}m ${seconds % 60}s`;
-                } else {
-                    return `in ${seconds}s`;
+                const totalSeconds = Math.floor(diff / 1000);
+                if (totalSeconds < 60) {
+                    return `in ${totalSeconds}s`;
                 }
+
+                const minutes = Math.floor(totalSeconds / 60);
+                if (minutes < 60) {
+                    return `in ${minutes}m`;
+                }
+
+                const hours = Math.floor(totalSeconds / 3600);
+                if (hours < 24) {
+                    const remMinutes = Math.floor((totalSeconds % 3600) / 60);
+                    if (remMinutes) return `in ${hours}h ${remMinutes}m`;
+                    return `in ${hours}h`;
+                }
+
+                const days = Math.floor(totalSeconds / 86400);
+                return `in ${days}d`;
             },
 
             /**
