@@ -196,6 +196,7 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "ruff>=0.4.0",
     "mypy>=1.8.0",
+    "pytest-playwright>=0.7.2",
 ]
 
 [tool.pytest.ini_options]
