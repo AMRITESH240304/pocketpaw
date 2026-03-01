@@ -43,10 +43,10 @@ class TestDashboardLoads:
 
 
 class TestCrewView:
-    """Tests for the Crew (Control Room) view."""
+    """Tests for the Deep Work view."""
 
     def test_crew_tab_switches_view(self, page: Page, dashboard_url: str):
-        """Test that clicking Crew tab switches to Crew view."""
+        """Test that clicking Deep Work tab switches to Deep Work view."""
         page.goto(dashboard_url)
 
         # Click Deep Work tab
@@ -55,26 +55,22 @@ class TestCrewView:
         # Wait for loading to complete
         page.wait_for_selector("text=Loading Crew...", state="hidden", timeout=10000)
 
-        # Check stats bar appears (indicator of Crew view) - use heading "Agents"
+        # Check stats bar appears (indicator of Deep Work view) - use heading "Agents"
         expect(page.get_by_role("heading", name="Agents")).to_be_visible()
 
     def test_new_agent_button_exists(self, page: Page, dashboard_url: str):
-        """Test that New Agent button exists in Crew view."""
+        """Test that New Agent button exists in Deep Work view."""
         page.goto(dashboard_url)
         page.get_by_text("Deep Work").click()
-        page.wait_for_timeout(500)
-
-        # Click New Agent
-        page.get_by_role("button", name="New Agent", exact=True).click()
         page.wait_for_selector("text=Loading Crew...", state="hidden", timeout=10000)
 
-        expect(page.locator("button:has-text('New Agent')")).to_be_visible()
+        expect(page.get_by_role("button", name="New Agent", exact=True)).to_be_visible()
 
     def test_new_task_button_exists(self, page: Page, dashboard_url: str):
-        """Test that New Task button exists in Crew view."""
+        """Test that New Task button exists in Deep Work view."""
         page.goto(dashboard_url)
         page.get_by_text("Deep Work").click()
-        page.wait_for_timeout(500)
+        page.wait_for_load_state("networkidle")
         page.wait_for_selector("text=Loading Crew...", state="hidden", timeout=10000)
 
         expect(page.locator("button:has-text('New Task')")).to_be_visible()
@@ -102,7 +98,7 @@ class TestAgentCreation:
         
         # Click Deep Work to access agent controls
         page.get_by_text("Deep Work").click()
-        page.wait_for_timeout(500)
+        page.wait_for_load_state("networkidle")
 
         # Click New Agent
         page.get_by_role("button", name="New Agent", exact=True).click()
@@ -120,7 +116,7 @@ class TestAgentCreation:
         
         # Click Deep Work to access agent controls
         page.get_by_text("Deep Work").click()
-        page.wait_for_timeout(500)
+        page.wait_for_load_state("networkidle")
 
         # Click New Agent button
         page.get_by_role("button", name="New Agent", exact=True).click()
@@ -146,7 +142,7 @@ class TestAgentCreation:
         
         # Click Deep Work to access agent controls
         page.get_by_text("Deep Work").click()
-        page.wait_for_timeout(500)
+        page.wait_for_load_state("networkidle")
 
         # First create an agent to delete
         page.get_by_role("button", name="New Agent", exact=True).click()
@@ -191,14 +187,13 @@ class TestAgentCreation:
 
 
 class TestTaskCreation:
-    """Tests for creating tasks in Crew view."""
+    """Tests for creating tasks in Deep Work view."""
 
     def test_create_task_modal_opens(self, page: Page, dashboard_url: str):
         """Test that clicking New Task opens the creation form."""
         page.goto(dashboard_url)
         page.wait_for_load_state("networkidle")
         page.get_by_text("Deep Work").click()
-        page.wait_for_timeout(500)
 
         # Click New Task
         page.get_by_role("button", name="New Task", exact=True).click()
@@ -255,7 +250,7 @@ class TestSidebarNavigation:
         if settings_btn.is_visible():
             settings_btn.click()
             # Settings modal should appear
-            page.wait_for_timeout(500)
+            page.wait_for_load_state("networkidle")
 
 
 class TestRemoteAccessModal:
@@ -270,3 +265,4 @@ class TestRemoteAccessModal:
         # May not be visible on all viewports
         if remote_btn.is_visible():
             expect(remote_btn).to_be_visible()
+            
