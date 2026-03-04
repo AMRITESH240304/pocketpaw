@@ -697,9 +697,9 @@ async def websocket_handler(
                                 ),
                             }
                         )
-                except Exception as e:
+                except Exception:
                     await websocket.send_json(
-                        {"type": "reminder_error", "content": f"Error adding reminder: {e}"}
+                        {"type": "reminder_error", "content": "Error adding reminder"}
                     )
 
             elif action == "delete_reminder":
