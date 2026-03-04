@@ -30,9 +30,12 @@ class TestDashboardLoads:
         """Test that all view tabs exist."""
         page.goto(dashboard_url)
 
-        tabs = ["Chat", "Activity", "Terminal"]
-        for tab in tabs:
+        exact_tabs = ["Chat", "Activity", "Terminal"]
+        for tab in exact_tabs:
             expect(page.get_by_role("button", name=tab, exact=True)).to_be_visible()
+
+        # Deep Work button contains child elements (badge text), so can't use exact match
+        expect(page.get_by_role("button", name="Deep Work").first).to_be_visible()
 
     def test_agent_mode_toggle_exists(self, page: Page, dashboard_url: str):
         """Test that agent mode toggle exists."""
@@ -50,10 +53,10 @@ class TestCrewView:
         page.goto(dashboard_url)
 
         # Click Deep Work tab
-        page.get_by_text("Deep Work").click()
+        page.get_by_role("button", name="Deep Work").click()
 
         # Wait for loading to complete
-        page.wait_for_selector("text=Loading Crew...", state="hidden", timeout=10000)
+        page.get_by_text("Loading Crew...").wait_for(state="hidden", timeout=10000)
 
         # Check stats bar appears (indicator of Deep Work view) - use heading "Agents"
         expect(page.get_by_role("heading", name="Agents")).to_be_visible()
@@ -61,25 +64,25 @@ class TestCrewView:
     def test_new_agent_button_exists(self, page: Page, dashboard_url: str):
         """Test that New Agent button exists in Deep Work view."""
         page.goto(dashboard_url)
-        page.get_by_text("Deep Work").click()
-        page.wait_for_selector("text=Loading Crew...", state="hidden", timeout=10000)
+        page.get_by_role("button", name="Deep Work").click()
+        page.get_by_text("Loading Crew...").wait_for(state="hidden", timeout=10000)
 
         expect(page.get_by_role("button", name="New Agent", exact=True)).to_be_visible()
 
     def test_new_task_button_exists(self, page: Page, dashboard_url: str):
         """Test that New Task button exists in Deep Work view."""
         page.goto(dashboard_url)
-        page.get_by_text("Deep Work").click()
+        page.get_by_role("button", name="Deep Work").click()
         page.wait_for_load_state("networkidle")
-        page.wait_for_selector("text=Loading Crew...", state="hidden", timeout=10000)
+        page.get_by_text("Loading Crew...").wait_for(state="hidden", timeout=10000)
 
-        expect(page.locator("button:has-text('New Task')")).to_be_visible()
+        expect(page.get_by_role("button", name="New Task", exact=True)).to_be_visible()
 
     def test_stats_bar_shows_numbers(self, page: Page, dashboard_url: str):
         """Test that stats bar shows agent and task counts."""
         page.goto(dashboard_url)
-        page.get_by_text("Deep Work").click()
-        page.wait_for_selector("text=Loading Crew...", state="hidden", timeout=10000)
+        page.get_by_role("button", name="Deep Work").click()
+        page.get_by_text("Loading Crew...").wait_for(state="hidden", timeout=10000)
 
         # Stats bar should show "Live" indicator
         expect(page.get_by_text("Live", exact=True)).to_be_visible()
@@ -97,14 +100,14 @@ class TestAgentCreation:
         page.wait_for_load_state("networkidle")
         
         # Click Deep Work to access agent controls
-        page.get_by_text("Deep Work").click()
+        page.get_by_role("button", name="Deep Work").click()
         page.wait_for_load_state("networkidle")
 
         # Click New Agent
         page.get_by_role("button", name="New Agent", exact=True).click()
 
         # Wait for modal animation
-        page.wait_for_timeout(300)
+        page.wait_for_load_state("networkidle")
 
         # Modal should appear with "Create Agent" button
         expect(page.get_by_role("button", name="Create Agent", exact=True)).to_be_visible()
@@ -115,12 +118,12 @@ class TestAgentCreation:
         page.wait_for_load_state("networkidle")
         
         # Click Deep Work to access agent controls
-        page.get_by_text("Deep Work").click()
+        page.get_by_role("button", name="Deep Work").click()
         page.wait_for_load_state("networkidle")
 
         # Click New Agent button
         page.get_by_role("button", name="New Agent", exact=True).click()
-        page.wait_for_timeout(300)  # Wait for modal animation
+        page.wait_for_load_state("networkidle")  # Wait for modal animation
 
         # Fill form using placeholder text
         page.get_by_placeholder("Agent name").fill("E2E Test Agent")
@@ -130,7 +133,7 @@ class TestAgentCreation:
         page.get_by_role("button", name="Create Agent", exact=True).click()
 
         # Wait for API response and UI update
-        page.wait_for_timeout(1500)
+        page.wait_for_load_state("networkidle")
 
         # Agent should appear somewhere (list or activity feed)
         expect(page.get_by_text("E2E Test Agent").first).to_be_visible(timeout=5000)
@@ -141,12 +144,12 @@ class TestAgentCreation:
         page.wait_for_load_state("networkidle")
         
         # Click Deep Work to access agent controls
-        page.get_by_text("Deep Work").click()
+        page.get_by_role("button", name="Deep Work").click()
         page.wait_for_load_state("networkidle")
 
         # First create an agent to delete
         page.get_by_role("button", name="New Agent", exact=True).click()
-        page.wait_for_timeout(300)
+        page.wait_for_load_state("networkidle")
         page.get_by_placeholder("Agent name").fill("DeleteMe Agent")
         page.get_by_placeholder("Role (e.g., Research Lead)").fill("Temp Role")
         page.get_by_role("button", name="Create Agent", exact=True).click()
@@ -193,11 +196,11 @@ class TestTaskCreation:
         """Test that clicking New Task opens the creation form."""
         page.goto(dashboard_url)
         page.wait_for_load_state("networkidle")
-        page.get_by_text("Deep Work").click()
+        page.get_by_role("button", name="Deep Work").click()
 
         # Click New Task
         page.get_by_role("button", name="New Task", exact=True).click()
-        page.wait_for_timeout(300)
+        page.wait_for_load_state("networkidle")
 
         # Modal should appear with New Task title input
         expect(page.get_by_role("heading", name="New Task")).to_be_visible()
@@ -205,22 +208,22 @@ class TestTaskCreation:
     def test_create_task_flow(self, page: Page, dashboard_url: str):
         """Test creating a new task through the UI and verify it appears in task list."""
         page.goto(dashboard_url)
-        page.get_by_text("Deep Work").click()
-        page.wait_for_selector("text=Loading Crew...", state="hidden", timeout=10000)
+        page.get_by_role("button", name="Deep Work").click()
+        page.get_by_text("Loading Crew...").wait_for(state="hidden", timeout=10000)
 
         # Click New Task button in header
-        page.locator("button:has-text('New Task')").first.click()
-        page.wait_for_timeout(300)  # Wait for modal animation
+        page.get_by_role("button", name="New Task").first.click()
+        page.wait_for_load_state("networkidle")  # Wait for modal animation
 
         # Fill form using placeholder
         page.get_by_placeholder("Task title").last.fill("E2E Task In List")
 
         # Submit - click the Create Task button inside the modal
-        modal_submit_btn = page.locator("button:has-text('Create Task')")
+        modal_submit_btn = page.get_by_role("button", name="Create Task")
         modal_submit_btn.last.click()
 
         # Wait for API response and UI update
-        page.wait_for_timeout(2000)
+        page.wait_for_load_state("networkidle")
 
         # Verify task appears in the task list panel (not just activity feed)
         task_panel = page.locator("div.flex-1.flex.flex-col.border-r")
@@ -244,9 +247,7 @@ class TestSidebarNavigation:
         page.goto(dashboard_url)
 
         # Click settings button (usually a gear icon)
-        settings_btn = page.locator(
-            "button:has(i[data-lucide='settings']), button:has-text('Settings')"
-        ).first
+        settings_btn = page.get_by_role("button", name="Settings").first
         if settings_btn.is_visible():
             settings_btn.click()
             # Settings modal should appear
@@ -261,8 +262,8 @@ class TestRemoteAccessModal:
         page.goto(dashboard_url)
 
         # This button might be hidden on mobile, so check desktop viewport
-        remote_btn = page.locator("button:has-text('Take Your Paw With You')")
+        remote_btn = page.get_by_role("button", name="Take Your Paw With You")
         # May not be visible on all viewports
         if remote_btn.is_visible():
             expect(remote_btn).to_be_visible()
-            
+                
