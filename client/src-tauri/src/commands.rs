@@ -1,13 +1,15 @@
 // Tauri IPC commands for the PocketPaw desktop client.
-// Updated: 2026-03-09 — Fix cross-platform build: use #[cfg(windows)] for
-//   Windows-specific process creation flags instead of cfg!(windows) runtime check.
-//   Prefix unused `profile` param with underscore to suppress warning.
+// Updated: 2026-03-09 — Improve install detection: also check `uv run pocketpaw`
+//   as fallback when CLI not directly in PATH. Strip ANSI escape codes from
+//   installer output before emitting to frontend. Previous fixes: #[cfg(windows)]
+//   for cross-platform build, unused `_profile` param.
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use regex::Regex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -51,14 +53,27 @@ pub struct InstallStatus {
     pub config_dir: String,
 }
 
-/// Check if PocketPaw is installed (config dir + CLI in PATH)
+/// Check if PocketPaw is installed (config dir + CLI in PATH or via uv)
 #[tauri::command]
 pub fn check_pocketpaw_installed() -> Result<InstallStatus, String> {
     let home = dirs::home_dir().ok_or("Could not determine home directory")?;
     let config_dir = home.join(".pocketpaw");
     let has_config_dir = config_dir.is_dir();
 
-    let has_cli = if cfg!(windows) {
+    // Check direct CLI first, then fall back to `uv run pocketpaw --version`
+    let has_cli = _check_cli_direct() || _check_cli_via_uv();
+
+    Ok(InstallStatus {
+        installed: has_config_dir && has_cli,
+        has_config_dir,
+        has_cli,
+        config_dir: config_dir.to_string_lossy().to_string(),
+    })
+}
+
+/// Check if `pocketpaw` is directly in PATH
+fn _check_cli_direct() -> bool {
+    if cfg!(windows) {
         Command::new("where")
             .arg("pocketpaw")
             .stdout(Stdio::null())
@@ -74,14 +89,18 @@ pub fn check_pocketpaw_installed() -> Result<InstallStatus, String> {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
-    };
+    }
+}
 
-    Ok(InstallStatus {
-        installed: has_config_dir && has_cli,
-        has_config_dir,
-        has_cli,
-        config_dir: config_dir.to_string_lossy().to_string(),
-    })
+/// Check if `pocketpaw` is available via `uv run`
+fn _check_cli_via_uv() -> bool {
+    Command::new("uv")
+        .args(["run", "pocketpaw", "--version"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 #[derive(Serialize, Clone)]
@@ -124,13 +143,18 @@ pub async fn install_pocketpaw(app: AppHandle, _profile: String) -> Result<bool,
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
     let reader = BufReader::new(stdout);
 
+    // Strip ANSI escape sequences from installer output
+    let ansi_re = Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[^[\]].?")
+        .unwrap();
+
     for line in reader.lines() {
         match line {
             Ok(text) => {
+                let clean = ansi_re.replace_all(&text, "").to_string();
                 let _ = app.emit(
                     "install-progress",
                     InstallProgress {
-                        line: text,
+                        line: clean,
                         done: false,
                         success: false,
                     },
