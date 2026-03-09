@@ -51,7 +51,7 @@ class AgentRouter:
             self._backend = cls(self.settings)
             self._active_backend_name = backend_name
             info = cls.info()
-            logger.info("🚀 Backend: %s", info.display_name)
+            logger.info("Backend: %s", info.display_name)
         except Exception as exc:
             logger.error("Failed to initialize '%s' backend: %s", backend_name, exc)
             self._active_backend_name = None
