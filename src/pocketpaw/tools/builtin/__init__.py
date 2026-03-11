@@ -35,7 +35,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "CalendarListTool": (".calendar", "CalendarListTool"),
     "CalendarCreateTool": (".calendar", "CalendarCreateTool"),
     "CalendarPrepTool": (".calendar", "CalendarPrepTool"),
-    "TextToSpeechTool": (".voice", "TextToSpeechTool"),
+    "TextToSpeechTool": (".tts", "TextToSpeechTool"),
     "SpeechToTextTool": (".stt", "SpeechToTextTool"),
     "ResearchTool": (".research", "ResearchTool"),
     "DelegateToClaudeCodeTool": (".delegate", "DelegateToClaudeCodeTool"),

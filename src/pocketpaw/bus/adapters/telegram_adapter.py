@@ -314,7 +314,18 @@ class TelegramAdapter(BaseChannelAdapter):
         try:
             with open(file_path, "rb") as f:
                 if media_type == "audio":
-                    await self.app.bot.send_audio(**kwargs, audio=f)
+                    # TTS-generated files should be sent as voice notes;
+                    # regular audio files go as audio (music player).
+                    is_tts = "generated/audio" in file_path
+                    if is_tts:
+                        try:
+                            await self.app.bot.send_voice(**kwargs, voice=f)
+                        except Exception:
+                            # Fallback: re-open and send as regular audio
+                            with open(file_path, "rb") as f2:
+                                await self.app.bot.send_audio(**kwargs, audio=f2)
+                    else:
+                        await self.app.bot.send_audio(**kwargs, audio=f)
                 elif media_type == "image":
                     await self.app.bot.send_photo(**kwargs, photo=f)
                 else:

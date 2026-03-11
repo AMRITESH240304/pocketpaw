@@ -500,13 +500,25 @@ class Settings(BaseSettings):
     tts_voice: str = Field(
         default="alloy", description="TTS voice name (OpenAI: alloy/echo/fable/onyx/nova/shimmer)"
     )
-    stt_provider: str = Field(default="openai", description="STT provider: 'openai' or 'sarvam'")
-    stt_model: str = Field(default="whisper-1", description="OpenAI Whisper model for STT")
+    voice_reply_enabled: bool = Field(
+        default=True,
+        description="Auto-synthesize TTS voice reply when the inbound message was a voice note",
+    )
+    stt_provider: str = Field(
+        default="openai", description="STT provider: 'openai', 'elevenlabs', or 'sarvam'"
+    )
+    stt_model: str = Field(
+        default="whisper-1",
+        description="STT model (whisper-1 for OpenAI, scribe_v1 for ElevenLabs, saaras:v3 for Sarvam)",
+    )
 
     # OCR
     ocr_provider: str = Field(
         default="openai", description="OCR provider: 'openai', 'sarvam', or 'tesseract'"
     )
+    
+    # ElevenLabs STT
+    elevenlabs_stt_model: str = Field(default="scribe_v1", description="ElevenLabs model for STT")
 
     # Sarvam AI
     sarvam_api_key: str | None = Field(default=None, description="Sarvam AI API subscription key")
