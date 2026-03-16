@@ -37,6 +37,9 @@ from pocketpaw.mission_control.models import (
 
 logger = logging.getLogger(__name__)
 
+# Frozenset for O(1) membership tests used in loops
+_DONE_STATUSES: frozenset[TaskStatus] = frozenset({TaskStatus.DONE, TaskStatus.SKIPPED})
+
 
 class DeepWorkSession:
     """Manages a Deep Work project from submission to completion.
@@ -479,7 +482,7 @@ class DeepWorkSession:
         # Mark all non-completed tasks as SKIPPED
         tasks = await self.manager.get_project_tasks(project_id)
         for task in tasks:
-            if task.status not in (TaskStatus.DONE, TaskStatus.SKIPPED):
+            if task.status not in _DONE_STATUSES:
                 task.status = TaskStatus.SKIPPED
                 task.updated_at = now_iso()
                 task.error_message = "Project cancelled"

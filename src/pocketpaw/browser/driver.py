@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Valid scroll directions
+_SCROLL_DIRECTIONS: frozenset[str] = frozenset({"up", "down"})
+
 
 @dataclass
 class NavigationResult:
@@ -265,7 +268,7 @@ class BrowserDriver:
         """
         page = self._require_page()
 
-        if direction not in ("up", "down"):
+        if direction not in _SCROLL_DIRECTIONS:
             raise ValueError(f"Invalid direction: {direction}. Must be 'up' or 'down'.")
 
         amount = self.SCROLL_AMOUNT if direction == "down" else -self.SCROLL_AMOUNT

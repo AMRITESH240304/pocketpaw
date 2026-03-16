@@ -15,6 +15,9 @@ from pocketpaw.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
+# Platforms that always have a display (never headless)
+_DISPLAY_PLATFORMS: frozenset[str] = frozenset({"darwin", "win32"})
+
 
 async def run_telegram_mode(settings: Settings) -> None:
     """Run in Telegram bot mode."""
@@ -246,7 +249,7 @@ def _is_headless() -> bool:
     """Detect headless server (no display)."""
     import os
 
-    if sys.platform in ("darwin", "win32"):
+    if sys.platform in _DISPLAY_PLATFORMS:
         return False  # macOS and Windows always have a display
     return not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY")
 

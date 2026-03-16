@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
+# Loopback hostnames — per RFC 8252 §7.3, port is ignored for these
+_LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1"})
+
 
 @dataclass
 class OAuthClient:
@@ -28,11 +31,11 @@ class OAuthClient:
             return True
 
         parsed = urlparse(uri)
-        if parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1"):
+        if parsed.scheme == "http" and parsed.hostname in _LOOPBACK_HOSTS:
             path = parsed.path or "/"
             for registered in self.redirect_uris:
                 rp = urlparse(registered)
-                if rp.scheme == "http" and rp.hostname in ("localhost", "127.0.0.1"):
+                if rp.scheme == "http" and rp.hostname in _LOOPBACK_HOSTS:
                     if path == (rp.path or "/"):
                         return True
 

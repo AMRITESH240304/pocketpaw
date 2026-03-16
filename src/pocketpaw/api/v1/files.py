@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Files"])
 
+# Paths that resolve to the home directory
+_HOME_PATH_ALIASES: frozenset[str] = frozenset({"~", ""})
+
 
 @router.get("/files/browse", response_model=BrowseResponse)
 async def browse_files(path: str = "~"):
@@ -36,7 +39,7 @@ async def browse_files(path: str = "~"):
     settings = get_settings()
 
     # Resolve path
-    if path in ("~", ""):
+    if path in _HOME_PATH_ALIASES:
         resolved_path = Path.home()
     elif not path.startswith("/"):
         resolved_path = Path.home() / path
@@ -127,7 +130,7 @@ async def get_file_content(path: str):
 
     settings = get_settings()
 
-    if path in ("~", ""):
+    if path in _HOME_PATH_ALIASES:
         raise HTTPException(status_code=400, detail="Cannot serve a directory")
 
     resolved = _resolve_path(path)

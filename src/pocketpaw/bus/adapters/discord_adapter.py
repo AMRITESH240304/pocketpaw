@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 
 DISCORD_MSG_LIMIT = 2000
 _NO_RESPONSE_MARKER = "[NO_RESPONSE]"
+
+# Slash commands that map directly to "/{command}" with no extra args
+_SIMPLE_SLASH_COMMANDS: frozenset[str] = frozenset(
+    {"new", "sessions", "clear", "status", "help", "kill", "delete", "backends"}
+)
 _BOT_AUTHOR_KEY = "__bot__"
 _CONVERSATION_HISTORY_SIZE = 30
 _CONVERSATION_CHAR_BUDGET = 12_000
@@ -554,16 +559,7 @@ class DiscliAdapter(BaseChannelAdapter):
         elif command == "tools":
             name = args.get("name", "")
             content = f"/tools {name}" if name else "/tools"
-        elif command in (
-            "new",
-            "sessions",
-            "clear",
-            "status",
-            "help",
-            "kill",
-            "delete",
-            "backends",
-        ):
+        elif command in _SIMPLE_SLASH_COMMANDS:
             content = f"/{command}"
         else:
             content = f"/{command}"

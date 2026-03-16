@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Soul config formats supported on hot-reload
+_SOUL_CONFIG_FORMATS: frozenset[str] = frozenset({".yaml", ".yml", ".json"})
+
 _manager: SoulManager | None = None
 
 
@@ -237,7 +240,7 @@ class SoulManager:
             new_soul = await self._try_awaken(Soul, file_path)
             if new_soul is None:
                 raise ValueError(f"Failed to load .soul file: {file_path}")
-        elif suffix in (".yaml", ".yml", ".json"):
+        elif suffix in _SOUL_CONFIG_FORMATS:
             new_soul = await Soul.birth_from_config(file_path)
         else:
             raise ValueError(

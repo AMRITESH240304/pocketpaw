@@ -31,6 +31,10 @@ _DEFAULT_IDENTITY = (
     "You are PocketPaw, a helpful AI assistant running locally on the user's computer."
 )
 
+# Frozensets for O(1) membership tests
+_HTTP_TRANSPORTS: frozenset[str] = frozenset({"http", "sse", "streamable-http"})
+_CHAT_ROLES: frozenset[str] = frozenset({"user", "assistant"})
+
 
 class ClaudeSDKBackend:
     """Claude Agent SDK backend — the recommended default.
@@ -410,7 +414,7 @@ class ClaudeSDKBackend:
                     entry["args"] = cfg.args
                 if cfg.env:
                     entry["env"] = cfg.env
-            elif cfg.transport in ("http", "sse", "streamable-http"):
+            elif cfg.transport in _HTTP_TRANSPORTS:
                 if not cfg.url:
                     logger.warning("MCP server '%s' (%s) has no url", cfg.name, cfg.transport)
                     continue
@@ -474,7 +478,7 @@ class ClaudeSDKBackend:
                 for msg in history:
                     role = msg.get("role", "user")
                     content = msg.get("content", "")
-                    if role in ("user", "assistant") and content:
+                    if role in _CHAT_ROLES and content:
                         api_messages.append({"role": role, "content": content})
             api_messages.append({"role": "user", "content": message})
 

@@ -13,6 +13,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Frozensets mapping tool name aliases → preview categories
+_SHELL_TOOLS: frozenset[str] = frozenset({"shell", "Bash"})
+_WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "Write"})
+_EDIT_TOOLS: frozenset[str] = frozenset({"edit_file", "Edit"})
+_READ_TOOLS: frozenset[str] = frozenset({"read_file", "Read"})
+
 
 class PlanStatus(StrEnum):
     PROPOSED = "proposed"
@@ -32,18 +38,18 @@ class PlanStep:
 
     def generate_preview(self) -> str:
         """Generate a human-readable preview of this step."""
-        if self.tool_name in ("shell", "Bash"):
+        if self.tool_name in _SHELL_TOOLS:
             cmd = self.tool_input.get("command", "")
             return f"$ {cmd}"
-        elif self.tool_name in ("write_file", "Write"):
+        elif self.tool_name in _WRITE_TOOLS:
             path = self.tool_input.get("path", self.tool_input.get("file_path", ""))
             content = self.tool_input.get("content", "")
             preview = content[:200] + "..." if len(content) > 200 else content
             return f"Write to {path}:\n{preview}"
-        elif self.tool_name in ("edit_file", "Edit"):
+        elif self.tool_name in _EDIT_TOOLS:
             path = self.tool_input.get("path", self.tool_input.get("file_path", ""))
             return f"Edit {path}"
-        elif self.tool_name in ("read_file", "Read"):
+        elif self.tool_name in _READ_TOOLS:
             path = self.tool_input.get("path", self.tool_input.get("file_path", ""))
             return f"Read {path}"
         else:

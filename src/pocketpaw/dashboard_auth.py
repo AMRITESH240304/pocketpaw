@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 auth_router = APIRouter()
 
+# Auth-rate-limited API paths
+_AUTH_RATE_LIMITED_PATHS: frozenset[str] = frozenset({"/api/auth/session", "/api/qr"})
+
 
 # ---------------------------------------------------------------------------
 # Localhost detection
@@ -178,7 +181,7 @@ async def _auth_dispatch(request: Request) -> Response | None:
 
     # Rate limiting — pick tier based on path
     client_ip = request.client.host if request.client else "unknown"
-    is_auth_path = request.url.path in ("/api/auth/session", "/api/qr")
+    is_auth_path = request.url.path in _AUTH_RATE_LIMITED_PATHS
     limiter = auth_limiter if is_auth_path else api_limiter
     rl_info = limiter.check(client_ip)
     if not rl_info.allowed:

@@ -110,6 +110,9 @@ _uvicorn_server = None
 # Flag indicating a restart was requested (vs normal shutdown / Ctrl+C)
 _restart_requested = False
 
+# Supported session export formats
+_EXPORT_FORMATS: frozenset[str] = frozenset({"json", "md"})
+
 # Get frontend directory
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 TEMPLATES_DIR = FRONTEND_DIR / "templates"
@@ -1327,7 +1330,7 @@ async def export_session(id: str = "", format: str = "json"):
     if not id:
         raise HTTPException(status_code=400, detail="Missing required parameter: id")
 
-    if format not in ("json", "md"):
+    if format not in _EXPORT_FORMATS:
         raise HTTPException(status_code=400, detail="Format must be 'json' or 'md'")
 
     manager = get_memory_manager()
