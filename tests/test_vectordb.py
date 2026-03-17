@@ -7,8 +7,9 @@ chromadb = pytest.importorskip("chromadb")
 
 @pytest.fixture
 def adapter(tmp_path):
-    """Fixture to provide a fresh ChromaAdapter for each test."""
-    return ChromaAdapter(str(tmp_path / "test_db"))
+    """Fixture to provide a fresh ChromaAdapter for each test using isolated temp paths."""
+    # We use tmp_path / "test_db" to ensure each test has a clean database
+    return ChromaAdapter(path=tmp_path / "test_db")
 
 @pytest.mark.asyncio
 async def test_add_and_search(adapter):
@@ -48,3 +49,12 @@ async def test_duplicate_ids(adapter):
     
     result = await adapter.get_by_id("dup")
     assert result == "Updated version"
+
+@pytest.mark.asyncio
+async def test_metadata_support(adapter):
+    """Verifies that the adapter correctly handles optional metadata."""
+    metadata = {"source": "test_file", "priority": "high"}
+    await adapter.add("meta1", "Contextual info", metadata=metadata)
+    
+    result = await adapter.get_by_id("meta1")
+    assert result == "Contextual info"

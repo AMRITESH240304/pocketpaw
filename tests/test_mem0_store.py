@@ -614,7 +614,7 @@ class TestMemorySettings:
         from pocketpaw.config import Settings
 
         settings = Settings()
-        assert settings.memory_backend == "vector"
+        assert settings.memory_backend == "file"
         assert settings.memory_use_inference is True
         assert settings.mem0_llm_provider == "anthropic"
         assert settings.mem0_llm_model == "claude-haiku-4-5-20251001"

@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from .protocol import VectorStoreProtocol
 
@@ -29,12 +30,13 @@ class ChromaAdapter(VectorStoreProtocol):
             name=collection_name
         )
 
-    async def add(self, id: str, text: str) -> None:
+    async def add(self, doc_id: str, text: str, metadata: dict[str, Any] | None = None) -> None:
         # FIX: Duplicate ID issue solved by using upsert instead of add
         await asyncio.to_thread(
             self.collection.upsert,
             documents=[text],
-            ids=[id],
+            ids=[doc_id],
+            metadatas=[metadata] if metadata else None # This is the "Safe" way
         )
 
     async def search(self, query: str, limit: int = 5) -> list[str]:
@@ -49,16 +51,18 @@ class ChromaAdapter(VectorStoreProtocol):
             return results["documents"][0]
         return []
 
-    async def delete(self, id: str) -> None:
+    async def delete(self, doc_id: str) -> None:
+        """Deletes a document by its ID."""
         await asyncio.to_thread(
             self.collection.delete,
-            ids=[id],
+            ids=[doc_id],
         )
 
-    async def get_by_id(self, id: str) -> str | None:
+    async def get_by_id(self, doc_id: str) -> str | None:
+        """FIX: get_by_id crash prevention logic."""
         results = await asyncio.to_thread(
             self.collection.get,
-            ids=[id],
+            ids=[doc_id],
         )
 
         # FIX: get_by_id crash prevention

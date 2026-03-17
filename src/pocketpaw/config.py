@@ -16,7 +16,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -336,7 +336,14 @@ class Settings(BaseSettings):
     # Memory Backend
     memory_backend: str = Field(
         default="file",
-        description="Memory backend: 'file' (simple markdown), 'mem0' (semantic with LLM)",
+        description=("Memory backend: 'file' (simple markdown), "
+        "'mem0' (semantic with LLM), 'vector' (ChromaDB)"
+        ),
+    )
+    vectordb_path: str = Field(
+        default="~/.pocketpaw/chroma_db",
+        description="Storage path for the vector database",
+        validation_alias=AliasChoices("POCKETPAW_VECTORDB_PATH", "POCKETPAW_VECTORDB_DIR")
     )
     memory_use_inference: bool = Field(
         default=True, description="Use LLM to extract facts from memories (only for mem0 backend)"
