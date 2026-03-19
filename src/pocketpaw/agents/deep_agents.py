@@ -296,8 +296,9 @@ class DeepAgentsBackend:
                     data = chunk.get("data")
                     if data is None:
                         continue
-                    # AIMessageChunk -- content may be str or list of blocks
-                    content = _extract_content_text(getattr(data, "content", ""))
+                    # v2 format: data is (AIMessageChunk, metadata_dict) tuple
+                    msg_chunk = data[0] if isinstance(data, tuple | list) else data
+                    content = _extract_content_text(getattr(msg_chunk, "content", ""))
                     if content:
                         yield AgentEvent(type="message", content=content)
 
