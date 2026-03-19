@@ -702,6 +702,8 @@ async def websocket_handler(
                             "copilotSdkProvider": settings.copilot_sdk_provider,
                             "copilotSdkModel": settings.copilot_sdk_model,
                             "copilotSdkMaxTurns": settings.copilot_sdk_max_turns,
+                            "deepAgentsModel": settings.deep_agents_model,
+                            "deepAgentsMaxTurns": settings.deep_agents_max_turns,
                             "opencodeBaseUrl": settings.opencode_base_url,
                             "opencodeModel": settings.opencode_model,
                             "opencodeMaxTurns": settings.opencode_max_turns,
