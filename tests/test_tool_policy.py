@@ -34,6 +34,7 @@ class TestProfileResolution:
             "clear_session",
             "rename_session",
             "delete_session",
+            "open_in_explorer",
         }
 
     def test_coding_profile_includes_fs_shell_memory(self):
@@ -64,7 +65,7 @@ class TestGroupExpansion:
 
     def test_expand_multiple_groups(self):
         result = ToolPolicy._expand_names(["group:shell", "group:memory"])
-        assert result == {"shell", "remember", "recall", "forget"}
+        assert result == {"shell", "run_python", "remember", "recall", "forget"}
 
     def test_expand_mixed_groups_and_names(self):
         result = ToolPolicy._expand_names(["group:memory", "custom_tool"])

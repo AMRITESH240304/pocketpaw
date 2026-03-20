@@ -60,6 +60,9 @@ def _make_sdk(settings=None):
     # Mark as available so chat() doesn't bail early
     sdk._sdk_available = True
     sdk._cli_available = True
+    # Wire up types that _initialize normally sets from SDK imports
+    sdk._HookMatcher = lambda matcher, hooks: MagicMock()
+    sdk._ClaudeAgentOptions = lambda **kw: MagicMock()
     return sdk
 
 
@@ -90,6 +93,9 @@ class _FakeStreamCM:
     async def __aexit__(self, *args):
         pass
 
+    def get_final_message(self):
+        return None
+
 
 class _FakeSDKClient:
     """Fake ClaudeSDKClient for testing the persistent client path."""
@@ -108,6 +114,10 @@ class _FakeSDKClient:
         self.queries.append(prompt)
 
     async def receive_response(self):
+        for msg in self._responses:
+            yield msg
+
+    async def receive_messages(self):
         for msg in self._responses:
             yield msg
 
@@ -274,6 +284,8 @@ async def test_chat_dispatches_fast_path_for_simple():
         mock_llm.is_ollama = False
         mock_llm.is_openai_compatible = False
         mock_llm.is_gemini = False
+        mock_llm.is_litellm = False
+        mock_llm.is_openrouter = False
         mock_resolve.return_value = mock_llm
 
         with patch(_MODEL_ROUTER) as MockRouter:
@@ -318,6 +330,7 @@ async def test_chat_uses_persistent_client_for_moderate():
         mock_llm.is_ollama = False
         mock_llm.is_openai_compatible = False
         mock_llm.is_gemini = False
+        mock_llm.is_litellm = False
         mock_llm.to_sdk_env.return_value = {"ANTHROPIC_API_KEY": "sk-test"}
         mock_resolve.return_value = mock_llm
 
@@ -328,7 +341,7 @@ async def test_chat_uses_persistent_client_for_moderate():
                 async for ev in sdk.run("analyze this code", system_prompt="identity"):
                     events.append(ev)
 
-    assert fake_client.connected
+    # Client was used (connected then disconnected by cleanup since no ResultMessage)
     assert fake_client.queries == ["analyze this code"]
     assert any(e.type == "done" for e in events)
 
@@ -358,6 +371,7 @@ async def test_chat_standard_path_when_routing_disabled():
         mock_llm.is_ollama = False
         mock_llm.is_openai_compatible = False
         mock_llm.is_gemini = False
+        mock_llm.is_litellm = False
         mock_llm.to_sdk_env.return_value = {"ANTHROPIC_API_KEY": "sk-test"}
         mock_resolve.return_value = mock_llm
 
@@ -511,6 +525,7 @@ async def test_persistent_client_falls_back_to_query():
         mock_llm.is_ollama = False
         mock_llm.is_openai_compatible = False
         mock_llm.is_gemini = False
+        mock_llm.is_litellm = False
         mock_llm.to_sdk_env.return_value = {"ANTHROPIC_API_KEY": "sk-test"}
         mock_resolve.return_value = mock_llm
 

@@ -69,13 +69,19 @@ async def run_multi_channel_mode(settings: Settings, args: argparse.Namespace) -
         if not settings.discord_bot_token:
             logger.error("Discord bot token not configured. Set POCKETPAW_DISCORD_BOT_TOKEN.")
         else:
-            from pocketpaw.bus.adapters.discord_adapter import DiscordAdapter
+            from pocketpaw.bus.adapters.discord_adapter import DiscliAdapter as DiscordAdapter
 
             adapters.append(
                 DiscordAdapter(
                     token=settings.discord_bot_token,
                     allowed_guild_ids=settings.discord_allowed_guild_ids,
                     allowed_user_ids=settings.discord_allowed_user_ids,
+                    allowed_channel_ids=settings.discord_allowed_channel_ids,
+                    conversation_channel_ids=settings.discord_conversation_channel_ids,
+                    bot_name=settings.discord_bot_name,
+                    status_type=settings.discord_status_type,
+                    activity_type=settings.discord_activity_type,
+                    activity_text=settings.discord_activity_text,
                 )
             )
 
@@ -186,12 +192,21 @@ async def run_multi_channel_mode(settings: Settings, args: argparse.Namespace) -
         return
 
     agent_loop = AgentLoop()
+    from pocketpaw.bus.commands import get_command_handler
+
+    get_command_handler().set_agent_loop(agent_loop)
 
     for adapter in adapters:
         await adapter.start(bus)
         logger.info(f"Started {adapter.channel.value} adapter")
 
     loop_task = asyncio.create_task(agent_loop.start())
+
+    # Start StatusTracker
+    from pocketpaw.dashboard_state import status_tracker
+
+    status_tracker._max_concurrent = settings.max_concurrent_conversations
+    await status_tracker.subscribe()
 
     # If WhatsApp is one of the adapters, start a minimal webhook server
     whatsapp_server = None
@@ -250,7 +265,7 @@ def _check_extras_installed(args: argparse.Namespace) -> None:
             missing.append(("python-telegram-bot", "telegram", "telegram"))
 
     channel_checks = {
-        "discord": ("discord.py", "discord", "discord"),
+        "discord": ("discord-cli-agent", "discli", "discord"),
         "slack": ("slack-bolt", "slack_bolt", "slack"),
     }
     for flag, (pkg, mod, extra) in channel_checks.items():

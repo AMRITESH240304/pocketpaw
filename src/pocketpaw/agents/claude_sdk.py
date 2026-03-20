@@ -1,5 +1,8 @@
 """
 Claude Agent SDK backend for PocketPaw.
+Updated: 2026-03-11 — Always bypass permissions in headless mode. Without this,
+  tool calls (like memory save via Bash) hang on messaging channels (Telegram,
+  Discord, Slack) because there's no terminal to approve permission prompts.
 
 Uses the official Claude Agent SDK (pip install claude-agent-sdk) which provides:
 - Built-in tools: Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch
@@ -10,6 +13,7 @@ Uses the official Claude Agent SDK (pip install claude-agent-sdk) which provides
 """
 
 import logging
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -74,7 +78,13 @@ class ClaudeSDKBackend:
             ],
             tool_policy_map=ClaudeSDKBackend._TOOL_POLICY_MAP,
             required_keys=["anthropic_api_key"],
-            supported_providers=["anthropic", "ollama", "openai_compatible"],
+            supported_providers=[
+                "anthropic",
+                "ollama",
+                "openrouter",
+                "openai_compatible",
+                "litellm",
+            ],
         )
 
     def __init__(self, settings: Settings):
@@ -165,7 +175,8 @@ class ClaudeSDKBackend:
             else:
                 logger.warning(
                     "⚠️ Claude Code CLI not found on PATH. "
-                    "Install with: npm install -g @anthropic-ai/claude-code"
+                    "Install with: npm install -g @anthropic-ai/claude-code "
+                    "and set ANTHROPIC_API_KEY, or switch to a different backend in Settings."
                 )
 
         except ImportError as e:
@@ -194,6 +205,51 @@ class ClaudeSDKBackend:
         for pattern in DANGEROUS_PATTERNS:
             if pattern.lower() in command_lower:
                 return pattern
+        return None
+
+    # Patterns that indicate an OS-level "open file" command.
+    _FILE_OPEN_PATTERNS = [
+        re.compile(
+            r"(?:^|&&|\|\||;)\s*start\s+(?:\"\"?\s*)?(.+)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?:^|&&|\|\||;)\s*explorer(?:\.exe)?\s+(.+)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?:^|&&|\|\||;)\s*xdg-open\s+(.+)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?:^|&&|\|\||;)\s*open\s+(?!-a)(.+)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?:^|&&|\|\||;)\s*(?:powershell(?:\.exe)?\s+(?:-[Cc]ommand\s+)?)?"
+            r"Invoke-Item\s+(.+)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?:^|&&|\|\||;)\s*cmd\s+/[cC]\s+start\s+(?:\"\"?\s*)?(.+)",
+            re.IGNORECASE,
+        ),
+    ]
+
+    def _is_file_open_command(self, command: str) -> str | None:
+        """Detect OS-level file-open commands and extract the file path.
+
+        Returns the file path if the command is an OS open, or None.
+        """
+        stripped = command.strip()
+        for pattern in self._FILE_OPEN_PATTERNS:
+            m = pattern.search(stripped)
+            if m:
+                path = m.group(1).strip().strip("'\"")
+                # Skip if it's opening a URL (http/https) — not a local file
+                if path.startswith(("http://", "https://")):
+                    return None
+                return path
         return None
 
     async def _block_dangerous_hook(self, input_data, tool_use_id: str | None, context) -> dict:
@@ -234,6 +290,24 @@ class ClaudeSDKBackend:
                         "permissionDecision": "deny",
                         "permissionDecisionReason": (
                             f"PocketPaw security: '{matched}' pattern is blocked"
+                        ),
+                    }
+                }
+
+            # Redirect OS file-open commands to the in-app viewer.
+            # Matches: start, explorer, xdg-open, open (macOS), Invoke-Item
+            redirect = self._is_file_open_command(command)
+            if redirect:
+                logger.info("↩ Redirecting OS open command to open_in_explorer: %s", redirect)
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "Do not use OS commands to open files. "
+                            "Instead, use the PocketPaw in-app viewer:\n"
+                            "python -m pocketpaw.tools.cli open_in_explorer "
+                            f'\'{{"path": "{redirect}", "action": "view"}}\''
                         ),
                     }
                 }
@@ -415,11 +489,20 @@ class ClaudeSDKBackend:
             )
             t2 = time.monotonic()
 
+            # Respect provider max_tokens (e.g. DeepSeek caps at 8192)
+            provider = self.settings.claude_sdk_provider or "anthropic"
+            if provider == "litellm" and self.settings.litellm_max_tokens > 0:
+                fast_max_tokens = self.settings.litellm_max_tokens
+            elif provider == "openai_compatible" and self.settings.openai_compatible_max_tokens > 0:
+                fast_max_tokens = self.settings.openai_compatible_max_tokens
+            else:
+                fast_max_tokens = 1024
+
             async with client.messages.stream(
                 model=model,
                 system=system_prompt,
                 messages=api_messages,
-                max_tokens=1024,
+                max_tokens=fast_max_tokens,
             ) as stream:
                 t3 = time.monotonic()
                 logger.info("Fast-path: stream opened in %.0fms", (t3 - t2) * 1000)
@@ -438,6 +521,23 @@ class ClaudeSDKBackend:
                         break
                     yield AgentEvent(type="message", content=text)
 
+                # Extract usage from the final message
+                final_msg = stream.get_final_message()
+                if final_msg and hasattr(final_msg, "usage") and final_msg.usage:
+                    u = final_msg.usage
+                    yield AgentEvent(
+                        type="token_usage",
+                        content="",
+                        metadata={
+                            "input_tokens": getattr(u, "input_tokens", 0),
+                            "output_tokens": getattr(u, "output_tokens", 0),
+                            "cached_input_tokens": getattr(u, "cache_read_input_tokens", 0)
+                            + getattr(u, "cache_creation_input_tokens", 0),
+                            "model": model,
+                            "backend": "claude_agent_sdk",
+                        },
+                    )
+
             yield AgentEvent(type="done", content="")
 
         except Exception as e:
@@ -447,15 +547,17 @@ class ClaudeSDKBackend:
             logger.error("Fast-path API error: %s", e)
             yield AgentEvent(type="error", content=llm.format_api_error(e))
 
-    async def _get_or_create_client(self, options: Any) -> Any:
+    async def _get_or_create_client(self, options: Any, *, session_key: str | None = None) -> Any:
         """Get or create a persistent ClaudeSDKClient.
 
-        Reuses the existing subprocess if model and tools haven't changed.
-        Reconnects when configuration changes are detected.
+        Reuses the existing subprocess if model, tools, **and session** haven't
+        changed.  Different sessions get a fresh subprocess so the CLI's
+        internal conversation context doesn't leak between chats.
         """
         import time
 
         key = (
+            f"{session_key or ''}:"
             f"{getattr(options, 'model', '')}:{sorted(getattr(options, 'allowed_tools', []) or [])}"
         )
 
@@ -467,8 +569,8 @@ class ClaudeSDKBackend:
         if self._client is not None:
             try:
                 await self._client.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to disconnect Claude client: %s", e)
             self._client = None
 
         # Create and connect new client
@@ -485,12 +587,65 @@ class ClaudeSDKBackend:
         if self._client is not None:
             try:
                 await self._client.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to disconnect Claude client: %s", e)
             self._client = None
             self._client_options_key = None
             self._client_in_use = False
             logger.info("Persistent client disconnected")
+
+    async def _resilient_query(self, prompt: str, options):
+        """Wrap stateless _query with MessageParseError recovery."""
+        try:
+            async for event in self._query(prompt=prompt, options=options):
+                yield event
+        except Exception as exc:
+            if "MessageParseError" in type(exc).__name__:
+                logger.warning("Skipping unrecognised SDK event in stateless query: %s", exc)
+            else:
+                raise
+
+    async def _resilient_receive(self, client):
+        """Iterate over client messages, recovering from parse errors.
+
+        Uses ``receive_messages()`` directly (not ``receive_response()``)
+        and handles generator death from ``MessageParseError`` by
+        re-creating the iterator from the same underlying anyio channel.
+
+        When ``parse_message()`` raises inside the SDK's
+        ``receive_messages()`` generator, the exception kills the entire
+        generator chain.  The old ``_safe_iter`` wrapper caught the error
+        and called ``continue``, but the generator was already dead — so
+        the next ``__anext__()`` returned ``StopAsyncIteration`` and the
+        loop exited early, leaving unconsumed events in the channel that
+        leaked into the *next* turn.
+
+        This method instead re-creates the ``receive_messages()``
+        iterator after a parse error, which reads from the same
+        underlying anyio memory channel and picks up where it left off.
+        """
+        _max_consecutive_errors = 50  # safety valve
+        _consecutive = 0
+        while _consecutive < _max_consecutive_errors:
+            try:
+                async for msg in client.receive_messages():
+                    _consecutive = 0  # reset on every successful message
+                    yield msg
+                    if self._ResultMessage and isinstance(msg, self._ResultMessage):
+                        return  # normal completion
+                # Generator ended naturally (end-of-stream) without ResultMessage
+                return
+            except Exception as exc:
+                if "MessageParseError" in type(exc).__name__:
+                    _consecutive += 1
+                    logger.debug(
+                        "Skipping unrecognised SDK event (retry %d), re-creating iterator: %s",
+                        _consecutive,
+                        exc,
+                    )
+                    continue
+                raise  # re-raise non-parse errors
+        logger.error("Too many consecutive MessageParseErrors — aborting stream")
 
     async def run(
         self,
@@ -520,10 +675,14 @@ class ClaudeSDKBackend:
                 type="error",
                 content=(
                     "❌ Claude Code CLI not found on this machine.\n\n"
-                    "Install with: `npm install -g @anthropic-ai/claude-code`\n\n"
-                    "Or switch to **PocketPaw Native** backend in "
-                    "**Settings → General** — it uses the Anthropic API directly "
-                    "and doesn't need the CLI."
+                    "The Claude Agent SDK backend requires the CLI. To fix this:\n\n"
+                    "**Install Claude Code CLI:**\n"
+                    "- Windows: `irm https://claude.ai/install.ps1 | iex`\n"
+                    "- macOS/Linux: `curl -fsSL https://claude.ai/install.sh | bash`\n"
+                    "- Or: `npm install -g @anthropic-ai/claude-code`\n\n"
+                    "Then set your `ANTHROPIC_API_KEY` in **Settings → General**.\n\n"
+                    "Or switch to a different backend in **Settings → General** "
+                    "(OpenAI Agents, Google ADK, Codex, etc.) that doesn't need the CLI."
                 ),
             )
             return
@@ -532,10 +691,22 @@ class ClaudeSDKBackend:
 
         self._stop_flag = False
 
+        # ── Prevent the SDK from closing stdin too early ──────────
+        # When hooks are present the SDK's stream_input() waits for
+        # the first ResultMessage before closing stdin.  The default
+        # timeout is 60 s which is far too short for long-running
+        # tool use (file search, code analysis, etc.).  Set to 24 h
+        # so the agent can work as long as it needs.
+        os.environ.setdefault(
+            "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT",
+            str(24 * 60 * 60 * 1000),  # 24 hours in ms
+        )
+
+        _stderr_lines: list[str] = []
         try:
-            # Resolve LLM provider early — needed for routing + env.
+            # Resolve LLM provider early -- needed for routing + env.
             # Use per-backend provider setting (defaults to "anthropic").
-            # An API key is REQUIRED for Anthropic provider — OAuth tokens from
+            # An API key is REQUIRED for Anthropic provider -- OAuth tokens from
             # Claude Free/Pro/Max plans are not permitted for third-party use.
             # See: https://code.claude.com/docs/en/legal-and-compliance
             from pocketpaw.llm.client import resolve_llm_client
@@ -543,27 +714,32 @@ class ClaudeSDKBackend:
             provider = self.settings.claude_sdk_provider or "anthropic"
             llm = resolve_llm_client(self.settings, force_provider=provider)
 
-            # ── API key enforcement for Anthropic provider ──────────────
-            # Anthropic's policy prohibits using OAuth tokens from Free/Pro/Max
-            # plans in third-party products. PocketPaw must use API key auth.
-            if not (llm.is_ollama or llm.is_openai_compatible or llm.is_gemini):
+            # ── API key check for Anthropic provider ──────────────
+            # Skip if using a non-Anthropic provider, or if the active
+            # provider is claude_code (it handles OAuth auth via its CLI).
+            is_claude_code_provider = provider in ("claude_code", "claude_agent_sdk")
+            is_non_anthropic = (
+                llm.is_ollama
+                or llm.is_openai_compatible
+                or llm.is_gemini
+                or llm.is_litellm
+                or llm.is_openrouter
+            )
+            if not is_non_anthropic:
                 has_api_key = bool(llm.api_key or os.environ.get("ANTHROPIC_API_KEY"))
-                if not has_api_key:
+                if not has_api_key and not is_claude_code_provider:
                     yield AgentEvent(
                         type="error",
                         content=(
-                            "**API key required** — The Claude SDK backend requires "
+                            "**API key required** -- The Claude SDK backend needs "
                             "an Anthropic API key.\n\n"
-                            "Anthropic's policy prohibits third-party applications from "
-                            "using OAuth tokens (Free/Pro/Max plan credentials). "
-                            "PocketPaw must authenticate with an API key.\n\n"
                             "**How to fix:**\n"
                             "1. Get an API key at "
-                            "[console.anthropic.com](https://console.anthropic.com/api-keys)\n"
-                            "2. Add it in **Settings → API Keys → Anthropic API Key**\n"
+                            "[console.anthropic.com](https://console.anthropic.com/settings/keys)\n"
+                            "2. Add it in **Settings > API Keys > Anthropic API Key**\n"
                             "3. Or set the `ANTHROPIC_API_KEY` environment variable\n\n"
                             "*Alternatively, switch to **Ollama (Local)** in Settings "
-                            "→ General for free local inference.*"
+                            "> General for free local inference.*"
                         ),
                     )
                     return
@@ -573,12 +749,7 @@ class ClaudeSDKBackend:
             # the fast-path (direct API) for simple queries.
             is_simple = False
             selection = None
-            if (
-                self.settings.smart_routing_enabled
-                and not llm.is_ollama
-                and not llm.is_openai_compatible
-                and not llm.is_gemini
-            ):
+            if self.settings.smart_routing_enabled and not is_non_anthropic:
                 from pocketpaw.agents.model_router import ModelRouter, TaskComplexity
 
                 model_router = ModelRouter(self.settings)
@@ -664,17 +835,41 @@ class ClaudeSDKBackend:
             }
 
             # Configure LLM provider for the Claude CLI subprocess.
-            # API key is enforced above for Anthropic; Ollama/OpenAI-compat
-            # providers set their own env vars via to_sdk_env().
+            # Ollama/OpenAI-compat providers set their own env vars via to_sdk_env().
             sdk_env = llm.to_sdk_env()
             if not sdk_env:
                 env_key = os.environ.get("ANTHROPIC_API_KEY")
                 if env_key:
                     sdk_env = {"ANTHROPIC_API_KEY": env_key}
+
+            # Strip nesting-detection env vars (set when launched from
+            # a Claude Code terminal) so the subprocess starts cleanly.
+            # These should already be removed by main(), but do it here
+            # too as a safety net.
+            for _strip_key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
+                os.environ.pop(_strip_key, None)
             if sdk_env:
                 options_kwargs["env"] = sdk_env
-            if llm.is_ollama or llm.is_openai_compatible or llm.is_gemini:
+            if llm.is_ollama or llm.is_openai_compatible or llm.is_gemini or llm.is_litellm:
                 options_kwargs["model"] = llm.model
+
+            # ── Debug logging for troubleshooting SDK startup ──
+            import shutil as _shutil
+
+            logger.info(
+                "SDK launch: provider=%s, has_api_key=%s, "
+                "CLAUDECODE=%s, CLAUDE_CODE_ENTRYPOINT=%s, "
+                "ANTHROPIC_API_KEY=%s, sdk_env_keys=%s, "
+                "cli_path=%s, cwd=%s",
+                provider,
+                bool(llm.api_key),
+                os.environ.get("CLAUDECODE", "<unset>"),
+                os.environ.get("CLAUDE_CODE_ENTRYPOINT", "<unset>"),
+                "set" if os.environ.get("ANTHROPIC_API_KEY") else "<unset>",
+                list(sdk_env.keys()) if sdk_env else "none",
+                _shutil.which("claude") or "<not found>",
+                self._cwd,
+            )
 
             # Wire in MCP servers (policy-filtered)
             mcp_servers = self._get_mcp_servers()
@@ -686,18 +881,19 @@ class ClaudeSDKBackend:
             if self._StreamEvent is not None:
                 options_kwargs["include_partial_messages"] = True
 
-            # Permission handling — PocketPaw runs headless (web/chat), so
-            # there is no terminal to show interactive permission prompts.
-            # bypassPermissions auto-approves ALL tool calls (including MCP).
+            # Permission handling — PocketPaw always runs headless (web dashboard,
+            # Telegram, Discord, Slack, etc.) with no terminal for interactive
+            # permission prompts. Without bypassPermissions, tool calls that need
+            # approval (like Bash — used by memory save, web search, etc.) hang
+            # indefinitely on messaging channels.
             # Dangerous Bash commands are still caught by the PreToolUse hook.
-            if self.settings.bypass_permissions:
-                options_kwargs["permission_mode"] = "bypassPermissions"
+            options_kwargs["permission_mode"] = "bypassPermissions"
 
             # Model selection for Anthropic providers:
             # 1. Smart routing (opt-in) — overrides with complexity-based model
             # 2. Explicit claude_sdk_model — user-chosen fixed model
             # 3. Neither set — let Claude Code CLI auto-select (recommended)
-            if not (llm.is_ollama or llm.is_openai_compatible or llm.is_gemini):
+            if not is_non_anthropic:
                 if self.settings.smart_routing_enabled:
                     from pocketpaw.agents.model_router import ModelRouter
 
@@ -708,8 +904,6 @@ class ClaudeSDKBackend:
                     options_kwargs["model"] = self.settings.claude_sdk_model
 
             # Capture stderr for better error diagnostics
-            _stderr_lines: list[str] = []
-
             def _on_stderr(line: str) -> None:
                 _stderr_lines.append(line)
                 logger.debug("Claude CLI stderr: %s", line)
@@ -725,32 +919,63 @@ class ClaudeSDKBackend:
             # _client_in_use guard prevents concurrent queries on the same
             # subprocess — cross-session messages fall back to stateless query.
             event_stream = None
+            logger.info(
+                "SDK dispatch: _client_in_use=%s, session_key=%s",
+                self._client_in_use,
+                session_key,
+            )
+            _persistent_client = None
             if not self._client_in_use:
                 try:
                     self._client_in_use = True
-                    client = await self._get_or_create_client(options)
-                    await client.query(message)
-                    event_stream = client.receive_response()
+                    _persistent_client = await self._get_or_create_client(
+                        options, session_key=session_key
+                    )
+                    logger.info("Persistent client: sending query (%d chars)", len(message))
+                    await _persistent_client.query(message)
+                    # Use _resilient_receive instead of receive_response() +
+                    # _safe_iter.  This handles MessageParseError by
+                    # re-creating the iterator from the same anyio channel,
+                    # preventing stale events from leaking into the next turn.
+                    event_stream = self._resilient_receive(_persistent_client)
+                    logger.info("Persistent client: _resilient_receive() ready")
                 except Exception as client_err:
                     logger.warning(
                         "Persistent client failed, falling back to stateless query: %s",
                         client_err,
                     )
+                    # Log stderr lines captured so far
+                    if _stderr_lines:
+                        logger.warning(
+                            "CLI stderr during persistent client failure:\n%s",
+                            "\n".join(_stderr_lines),
+                        )
                     # Clear broken client so next call creates a fresh one
                     self._client = None
                     self._client_options_key = None
                     self._client_in_use = False
+                    _persistent_client = None
 
             if event_stream is None:
-                event_stream = self._query(prompt=message, options=options)
+                logger.info("Starting stateless query (fallback — _client_in_use was True)")
+                event_stream = self._resilient_query(prompt=message, options=options)
 
             # State tracking for StreamEvent deduplication
             _streamed_via_events = False
             _announced_tools: set[str] = set()
+            _event_count = 0
+            _saw_result = False  # Track if ResultMessage was consumed
 
             # Stream responses — release the persistent client guard when done
             try:
                 async for event in event_stream:
+                    _event_count += 1
+                    if _event_count <= 3:
+                        logger.info(
+                            "SDK event #%d: type=%s",
+                            _event_count,
+                            type(event).__name__,
+                        )
                     if self._stop_flag:
                         logger.info("🛑 Stop flag set, breaking stream")
                         break
@@ -847,8 +1072,31 @@ class ClaudeSDKBackend:
 
                     # ========== ResultMessage - final result ==========
                     if self._ResultMessage and isinstance(event, self._ResultMessage):
+                        _saw_result = True
                         is_error = getattr(event, "is_error", False)
                         result = getattr(event, "result", "")
+
+                        # Extract token usage from ResultMessage
+                        # Per SDK docs: ResultMessage has total_cost_usd and usage dict
+                        total_cost = getattr(event, "total_cost_usd", None)
+                        usage = getattr(event, "usage", None) or {}
+                        if isinstance(usage, dict) and (usage or total_cost):
+                            _model_name = options_kwargs.get("model", "claude")
+                            yield AgentEvent(
+                                type="token_usage",
+                                content="",
+                                metadata={
+                                    "input_tokens": usage.get("input_tokens", 0),
+                                    "output_tokens": usage.get("output_tokens", 0),
+                                    "cached_input_tokens": usage.get("cache_read_input_tokens", 0)
+                                    + usage.get("cache_creation_input_tokens", 0),
+                                    "total_cost_usd": total_cost,
+                                    "model": _model_name
+                                    if isinstance(_model_name, str)
+                                    else "claude",
+                                    "backend": "claude_agent_sdk",
+                                },
+                            )
 
                         if is_error:
                             logger.error(f"ResultMessage error: {result}")
@@ -861,13 +1109,38 @@ class ClaudeSDKBackend:
                     event_class = event.__class__.__name__
                     logger.debug(f"Unknown event type: {event_class}")
             finally:
+                # ── Drain remaining events if the main loop exited
+                # before consuming the ResultMessage.  For the persistent
+                # client, _resilient_receive handles this.  For the
+                # stateless path or early-break scenarios (stop flag),
+                # we still need to ensure the pipe is clean. ──
+                if _persistent_client is not None and not _saw_result and self._client is not None:
+                    logger.warning(
+                        "Main loop exited without ResultMessage — "
+                        "destroying persistent client to avoid stale data"
+                    )
+                    try:
+                        await self._client.disconnect()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("Failed to disconnect client during cleanup: %s", exc)
+                    self._client = None
+                    self._client_options_key = None
+
                 self._client_in_use = False
+                logger.info(
+                    "SDK stream finished: %d events, _client_in_use=False",
+                    _event_count,
+                )
 
             yield AgentEvent(type="done", content="")
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Claude Agent SDK error: {error_msg}")
+            logger.error(f"Claude Agent SDK error: {error_msg}", exc_info=True)
+
+            # Log any stderr captured from the CLI subprocess
+            if _stderr_lines:
+                logger.error("CLI stderr output:\n%s", "\n".join(_stderr_lines))
 
             # Clear client on unexpected errors
             self._client = None
@@ -880,9 +1153,13 @@ class ClaudeSDKBackend:
                     type="error",
                     content=(
                         "❌ Claude Code CLI not found.\n\n"
-                        "Install with: npm install -g @anthropic-ai/claude-code\n\n"
-                        "Or switch to a different backend in "
-                        "**Settings → General**."
+                        "**Install Claude Code CLI:**\n"
+                        "- Windows: `irm https://claude.ai/install.ps1 | iex`\n"
+                        "- macOS/Linux: `curl -fsSL https://claude.ai/install.sh | bash`\n"
+                        "- Or: `npm install -g @anthropic-ai/claude-code`\n\n"
+                        "Then set your `ANTHROPIC_API_KEY` in **Settings → General**.\n\n"
+                        "Or switch to a different backend in **Settings → General** "
+                        "(OpenAI Agents, Google ADK, Codex, etc.)."
                     ),
                 )
             else:
@@ -898,8 +1175,8 @@ class ClaudeSDKBackend:
         if self._client is not None:
             try:
                 await self._client.interrupt()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to interrupt Claude client: %s", e)
         await self.cleanup()
         logger.info("🛑 Claude Agent SDK stop requested")
 

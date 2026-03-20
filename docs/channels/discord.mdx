@@ -1,5 +1,5 @@
 ---
-title: Discord
+title: "Discord Bot Setup: Add PocketPaw to Your Server"
 description: "Run PocketPaw as a Discord bot with /paw slash commands, DM and mention support, streaming responses with edit-in-place, and configurable guild and user allow-lists."
 section: Channels
 ogType: article
@@ -7,9 +7,9 @@ keywords: ["discord bot", "slash commands", "discord.py", "dm support", "streami
 tags: ["channels", "discord"]
 ---
 
-# Discord
+# Discord Bot Setup: Add PocketPaw to Your Server
 
-PocketPaw integrates with Discord via `discord.py`. It supports slash commands, direct messages, and @mention in channels.
+PocketPaw integrates with Discord via `discli` (Discord CLI agent). It supports slash commands, direct messages, @mention in channels, and full server management through an MCP-based tool layer that works across all agent backends.
 
 ## Setup
 
@@ -47,6 +47,9 @@ PocketPaw integrates with Discord via `discord.py`. It supports slash commands, 
 | Bot token | `POCKETPAW_DISCORD_BOT_TOKEN` | Discord bot token |
 | Allowed guilds | `POCKETPAW_DISCORD_ALLOWED_GUILD_IDS` | Comma-separated guild IDs |
 | Allowed users | `POCKETPAW_DISCORD_ALLOWED_USER_IDS` | Comma-separated user IDs |
+| Allowed channels | `POCKETPAW_DISCORD_ALLOWED_CHANNEL_IDS` | Comma-separated channel IDs |
+| Conversation channels | `POCKETPAW_DISCORD_CONVERSATION_CHANNEL_IDS` | Channels with conversation mode enabled |
+| Bot name | `POCKETPAW_DISCORD_BOT_NAME` | Display name used in conversation prompts |
 
 ## Features
 
@@ -77,6 +80,51 @@ export POCKETPAW_DISCORD_ALLOWED_GUILD_IDS="111222333,444555666"
 export POCKETPAW_DISCORD_ALLOWED_USER_IDS="777888999"
 ```
 
+### Conversation Mode
+
+Conversation mode lets the bot participate naturally in group channels without requiring explicit mentions or slash commands.
+
+When enabled for a channel, the bot:
+
+- **Tracks recent messages** in a rolling 30-message window
+- **Decides when to respond** based on context: responds when addressed by name, when it's part of an active conversation, or when someone asks a question while it's recently active
+- **Stays silent when appropriate** by returning a `[NO_RESPONSE]` marker that the adapter suppresses, allowing natural "lurking"
+- **Injects conversation context** from the last 30 messages (up to 12,000 characters) into the agent prompt for natural, context-aware replies
+
+Enable conversation mode per channel with the `/converse` admin command.
+
+### Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/paw <message>` | Send a message to the AI agent |
+| `/new` | Start a fresh conversation |
+| `/sessions` | List your conversation sessions |
+| `/resume <target>` | Resume a previous session |
+| `/clear` | Clear the current session history |
+| `/rename <title>` | Rename the current session |
+| `/status` | Show current session info |
+| `/delete` | Delete the current session |
+| `/backend [name]` | Show or switch agent backend |
+| `/backends` | List all available backends |
+| `/model [name]` | Show or switch model |
+| `/tools [name]` | Show or toggle a specific tool |
+| `/help` | Show PocketPaw help |
+| `/kill` | Cancel the current request |
+| `/converse` | Toggle conversation mode (requires Administrator or Manage Server) |
+
+### Kill Command
+
+Send `/kill` or `!kill` in any channel to cancel the currently running agent task for that session. This is useful when a response is taking too long or the agent is stuck. The kill command works across all channels (Discord, Telegram, Slack, WhatsApp, and the web dashboard).
+
+### Discord MCP Server
+
+When the Discord adapter starts, it auto-registers a `pocketpaw-discord` MCP server. This exposes Discord operations (send messages, create polls, manage roles, etc.) as native MCP tools available to any backend -- including `codex_cli`, `google_adk`, and `claude_agent_sdk`.
+
+The MCP server wraps the `discli` CLI and provides structured tools like `discord_send_message`, `discord_create_poll`, `discord_add_reaction`, etc. Backends don't need special Discord integration; they just call MCP tools.
+
+The server config is saved to `~/.pocketpaw/mcp_servers.json` and persists across restarts.
+
 ## Installation
 
 ```bash
@@ -86,4 +134,21 @@ curl -fsSL https://pocketpaw.xyz/install.sh | sh
 pip install pocketpaw[discord]
 ```
 
-This installs `discord.py` as an optional dependency.
+This installs `discord.py` and `discord-cli-agent` as optional dependencies.
+
+## Related
+
+<CardGroup>
+  <Card title="Slack Bot Setup" icon="lucide:hash" href="/channels/slack">
+    Socket Mode integration with thread support and no public URL needed.
+  </Card>
+  <Card title="Telegram Bot Setup" icon="lucide:send" href="/channels/telegram">
+    Topic-aware conversations, inline keyboards, and streaming responses.
+  </Card>
+  <Card title="Tools Overview" icon="lucide:wrench" href="/tools">
+    Explore 50+ built-in tools your Discord bot can use.
+  </Card>
+  <Card title="All Channels" icon="lucide:radio" href="/channels">
+    Compare all 9+ supported messaging platforms.
+  </Card>
+</CardGroup>

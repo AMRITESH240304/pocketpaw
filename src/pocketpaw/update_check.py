@@ -9,15 +9,21 @@ Cache stored in ~/.pocketpaw/.update_check so the result is shared between
 CLI launches and the dashboard API.
 """
 
+import atexit
 import json
 import logging
 import os
+import re
 import sys
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_HTTP_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="update-check")
+atexit.register(_HTTP_EXECUTOR.shutdown, wait=False)
 
 PYPI_URL = "https://pypi.org/pypi/pocketpaw/json"
 CACHE_FILENAME = ".update_check"
@@ -30,8 +36,15 @@ GITHUB_API_URL = "https://api.github.com/repos/pocketpaw/pocketpaw/releases/tags
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
-    """Parse '0.4.1' into (0, 4, 1)."""
-    return tuple(int(x) for x in v.strip().split("."))
+    """Parse '0.4.1' into (0, 4, 1).
+
+    Handles pre-release suffixes like '0.4.1rc1' by stripping non-numeric parts.
+    """
+    parts = []
+    for segment in v.strip().split("."):
+        num = re.match(r"\d+", segment)
+        parts.append(int(num.group()) if num else 0)
+    return tuple(parts)
 
 
 def check_for_updates(current_version: str, config_dir: Path) -> dict | None:
@@ -77,6 +90,19 @@ def check_for_updates(current_version: str, config_dir: Path) -> dict | None:
     except Exception:
         logger.debug("Update check failed (network or parse error)", exc_info=True)
         return None
+
+
+async def check_for_updates_async(current_version: str, config_dir: Path) -> dict | None:
+    """Async wrapper for update checks to avoid blocking event loops."""
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _HTTP_EXECUTOR,
+        check_for_updates,
+        current_version,
+        config_dir,
+    )
 
 
 # ---------------------------------------------------------------------------

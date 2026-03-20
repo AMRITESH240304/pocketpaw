@@ -11,12 +11,15 @@
 
 import asyncio
 import json
+import logging
 import re
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 from pocketpaw.memory.protocol import MemoryEntry, MemoryType
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_utc(dt: datetime) -> datetime:
@@ -175,6 +178,11 @@ class FileMemoryStore:
         self._session_write_locks: dict[str, asyncio.Lock] = {}
         self._session_index_lock = asyncio.Lock()  # Protects _index.json read-modify-write
         self._alias_lock = asyncio.Lock()  # Protects _aliases.json read-modify-write
+
+        # Inverted index for O(k) search narrowing (word -> set of entry IDs)
+        self._inverted: dict[str, set[str]] = {}
+        self._inv_dirty = True
+
         self._load_index()
 
         # Build session index on first run (migration)
@@ -472,6 +480,21 @@ class FileMemoryStore:
         ):
             self._parse_markdown_file(daily_file, MemoryType.DAILY)
 
+        self._inv_dirty = True
+
+    def _rebuild_inverted(self) -> None:
+        """Build/rebuild the inverted index from _index. Resets _inv_dirty."""
+        inv: dict[str, set[str]] = {}
+        for eid, entry in self._index.items():
+            words = _tokenize(entry.content)
+            header = entry.metadata.get("header", "")
+            if header:
+                words |= _tokenize(header)
+            for w in words:
+                inv.setdefault(w, set()).add(eid)
+        self._inverted = inv
+        self._inv_dirty = False
+
     def _parse_markdown_file(self, path: Path, memory_type: MemoryType) -> None:
         """Parse a markdown file into memory entries."""
         content = path.read_text(encoding="utf-8")
@@ -569,6 +592,7 @@ class FileMemoryStore:
         entry.metadata["source"] = str(target_path)
         entry.updated_at = datetime.now(tz=UTC)
         self._index[entry.id] = entry
+        self._inv_dirty = True
 
         # Persist to markdown
         await self._append_to_markdown(target_path, entry)
@@ -600,13 +624,13 @@ class FileMemoryStore:
             session_file = self._get_session_file(entry.session_key)
 
             # Run blocking file I/O in a thread to avoid freezing the event loop
-            def _read_and_append():
+            def _read_and_append_once() -> list[dict[str, object]]:
                 session_data = []
                 if session_file.exists():
                     try:
                         session_data = json.loads(session_file.read_text(encoding="utf-8"))
-                    except json.JSONDecodeError:
-                        pass
+                    except json.JSONDecodeError as exc:
+                        logger.warning("Discarding corrupt session file %s: %s", session_file, exc)
                 session_data.append(
                     {
                         "id": entry.id,
@@ -620,20 +644,22 @@ class FileMemoryStore:
                 tmp = session_file.with_suffix(".tmp")
                 tmp.write_text(json.dumps(session_data, indent=2), encoding="utf-8")
                 # On Windows, os.replace can fail with PermissionError if another
-                # process briefly holds the file handle. Retry a few times.
-                import time as _time
-
-                for _attempt in range(5):
-                    try:
-                        tmp.replace(session_file)
-                        break
-                    except PermissionError:
-                        if _attempt == 4:
-                            raise
-                        _time.sleep(0.01 * (2**_attempt))
+                # process briefly holds the file handle.
+                tmp.replace(session_file)
                 return session_data
 
-            session_data = await asyncio.to_thread(_read_and_append)
+            session_data: list[dict[str, object]] | None = None
+            for _attempt in range(5):
+                try:
+                    session_data = await asyncio.to_thread(_read_and_append_once)
+                    break
+                except PermissionError:
+                    if _attempt == 4:
+                        raise
+                    await asyncio.sleep(0.01 * (2**_attempt))
+
+            if session_data is None:
+                return
 
             # Update session index
             await self._update_session_index(entry.session_key, entry, session_data)
@@ -648,6 +674,7 @@ class FileMemoryStore:
             return False
 
         entry = self._index.pop(entry_id)
+        self._inv_dirty = True
 
         # Rewrite the source markdown file without this entry
         source = entry.metadata.get("source")
@@ -689,19 +716,30 @@ class FileMemoryStore:
         candidates: list[tuple[float, MemoryEntry]] = []
         query_words = _tokenize(query) if query else set()
 
-        for entry in self._index.values():
-            # Type filter
-            if memory_type and entry.type != memory_type:
-                continue
+        if query_words:
+            # Rebuild inverted index if dirty
+            if self._inv_dirty:
+                self._rebuild_inverted()
 
-            # Tag filter
-            if tags and not any(t in entry.tags for t in tags):
-                continue
+            # Narrow candidates to entries sharing at least one query word
+            candidate_ids: set[str] = set()
+            for w in query_words:
+                candidate_ids |= self._inverted.get(w, set())
 
-            # Query filter: word-overlap scoring
-            if query_words:
+            for eid in candidate_ids:
+                entry = self._index.get(eid)
+                if not entry:
+                    continue
+
+                # Type filter
+                if memory_type and entry.type != memory_type:
+                    continue
+
+                # Tag filter
+                if tags and not any(t in entry.tags for t in tags):
+                    continue
+
                 content_words = _tokenize(entry.content)
-                # Also include header in searchable text
                 header = entry.metadata.get("header", "")
                 if header:
                     content_words |= _tokenize(header)
@@ -710,10 +748,15 @@ class FileMemoryStore:
                 if not overlap:
                     continue
                 score = len(overlap) / len(query_words)
-            else:
-                score = 0.0
-
-            candidates.append((score, entry))
+                candidates.append((score, entry))
+        else:
+            # No query — apply type/tag filters across all entries
+            for entry in self._index.values():
+                if memory_type and entry.type != memory_type:
+                    continue
+                if tags and not any(t in entry.tags for t in tags):
+                    continue
+                candidates.append((0.0, entry))
 
         # Sort by score descending
         candidates.sort(key=lambda x: x[0], reverse=True)
@@ -764,7 +807,8 @@ class FileMemoryStore:
                 )
                 for item in data
             ]
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError) as exc:
+            logger.warning("Could not parse session file %s: %s", session_file, exc)
             return []
 
     async def clear_session(self, session_key: str) -> int:
@@ -778,7 +822,8 @@ class FileMemoryStore:
                     count = len(data)
                     session_file.unlink()
                     return count
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as exc:
+                    logger.warning("Corrupt session file removed %s: %s", session_file, exc)
                     session_file.unlink()
                     return 0
             return 0

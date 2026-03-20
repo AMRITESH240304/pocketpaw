@@ -41,6 +41,63 @@ class TestBootstrapContext:
         assert "# Key Knowledge" in prompt
         assert "- Fact 1" in prompt
 
+    def test_identity_wrapped_in_xml_tags(self):
+        """Identity block must be wrapped in <identity>...</identity> XML tags."""
+        ctx = BootstrapContext(
+            name="TestAgent",
+            identity="I am a test agent.",
+            soul="Soul text.",
+            style="Style text.",
+        )
+        prompt = ctx.to_system_prompt()
+        assert "<identity>" in prompt
+        assert "</identity>" in prompt
+
+    def test_identity_appears_after_instructions(self):
+        """Instructions (tool docs) must come before the identity block."""
+        ctx = BootstrapContext(
+            name="TestAgent",
+            identity="I am a test agent.",
+            soul="Soul text.",
+            style="Style text.",
+            instructions="Tool docs go here.",
+        )
+        prompt = ctx.to_system_prompt()
+        instructions_pos = prompt.index("Tool docs go here.")
+        identity_pos = prompt.index("<identity>")
+        assert instructions_pos < identity_pos, (
+            "Instructions should appear before the <identity> block"
+        )
+
+    def test_user_profile_inside_identity_block(self):
+        """USER.md content must be inside the <identity> block."""
+        ctx = BootstrapContext(
+            name="TestAgent",
+            identity="I am a test agent.",
+            soul="Soul.",
+            style="Style.",
+            user_profile="Name: Alice",
+        )
+        prompt = ctx.to_system_prompt()
+        identity_start = prompt.index("<identity>")
+        identity_end = prompt.index("</identity>")
+        user_profile_pos = prompt.index("Name: Alice")
+        assert identity_start < user_profile_pos < identity_end, (
+            "user_profile should be inside the <identity> XML block"
+        )
+
+    def test_no_instructions_prompt_has_identity_only(self):
+        """When there are no instructions, the prompt is just the identity block."""
+        ctx = BootstrapContext(
+            name="TestAgent",
+            identity="I am a test agent.",
+            soul="Soul.",
+            style="Style.",
+        )
+        prompt = ctx.to_system_prompt()
+        # Should start with <identity> (after stripping leading whitespace)
+        assert prompt.strip().startswith("<identity>")
+
 
 class TestDefaultBootstrapProvider:
     """Tests for DefaultBootstrapProvider."""
@@ -70,6 +127,60 @@ class TestDefaultBootstrapProvider:
         # Reload
         ctx = await provider.get_context()
         assert ctx.identity == "I am CustomAgent"
+
+    @pytest.mark.asyncio
+    async def test_get_context_uses_cache(self, temp_identity_path):
+        """Second call returns cached content without re-reading from disk."""
+        from pocketpaw.bootstrap import default_provider as dp
+
+        dp._identity_file_cache.clear()
+        provider = DefaultBootstrapProvider(base_path=temp_identity_path)
+
+        ctx1 = await provider.get_context()
+        cached_snapshot = dict(dp._identity_file_cache)
+        assert len(cached_snapshot) > 0
+
+        ctx2 = await provider.get_context()
+        # Cache entries unchanged (same mtime → no re-read)
+        assert dp._identity_file_cache == cached_snapshot
+        assert ctx1.identity == ctx2.identity
+
+    @pytest.mark.asyncio
+    async def test_cache_invalidates_on_file_change(self, temp_identity_path):
+        """Cache is invalidated when a file's mtime changes."""
+        import os
+        import time
+
+        from pocketpaw.bootstrap import default_provider as dp
+
+        dp._identity_file_cache.clear()
+        provider = DefaultBootstrapProvider(base_path=temp_identity_path)
+
+        ctx1 = await provider.get_context()
+        assert "You are PocketPaw" in ctx1.identity
+
+        identity = temp_identity_path / "IDENTITY.md"
+        identity.write_text("Updated identity", encoding="utf-8")
+        # Force mtime forward regardless of filesystem resolution
+        future = time.time() + 10
+        os.utime(identity, (future, future))
+
+        ctx2 = await provider.get_context()
+        assert ctx2.identity == "Updated identity"
+
+    @pytest.mark.asyncio
+    async def test_cache_handles_missing_file(self, temp_identity_path):
+        """Cache returns empty string for missing files."""
+        from pocketpaw.bootstrap import default_provider as dp
+
+        dp._identity_file_cache.clear()
+        provider = DefaultBootstrapProvider(base_path=temp_identity_path)
+
+        # Remove USER.md
+        (temp_identity_path / "USER.md").unlink()
+
+        ctx = await provider.get_context()
+        assert ctx.user_profile == ""
 
 
 class TestAgentContextBuilder:

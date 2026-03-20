@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 TOOL_GROUPS: dict[str, list[str]] = {
     "group:fs": ["read_file", "write_file", "edit_file", "list_dir", "directory_tree"],
-    "group:shell": ["shell"],
+    "group:shell": ["shell", "run_python"],
+    "group:packages": ["install_package"],
     "group:browser": ["browser"],
     "group:memory": ["remember", "recall", "forget"],
     "group:desktop": ["desktop", "system_info"],
@@ -33,7 +34,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "group:calendar": ["calendar_list", "calendar_create", "calendar_prep"],
     "group:voice": ["text_to_speech", "speech_to_text"],
     "group:research": ["research"],
-    "group:delegation": ["delegate_claude_code"],
+    "group:delegation": ["delegate_claude_code", "delegate_to_a2a_agent"],
     "group:drive": ["drive_list", "drive_download", "drive_upload", "drive_share"],
     "group:docs": ["docs_read", "docs_create", "docs_search"],
     "group:spotify": [
@@ -42,7 +43,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "spotify_playback",
         "spotify_playlist",
     ],
-    "group:media": ["image_generate", "ocr"],
+    "group:media": ["image_generate", "ocr", "deliver_artifact"],
     "group:translate": ["translate"],
     "group:reddit": ["reddit_search", "reddit_read", "reddit_trending"],
     "group:sessions": [
@@ -53,6 +54,8 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "rename_session",
         "delete_session",
     ],
+    "group:explorer": ["open_in_explorer"],
+    "group:discord": ["discord_cli"],
     "group:mcp": [],  # Placeholder — MCP tools are dynamic per server
 }
 
@@ -61,10 +64,10 @@ TOOL_GROUPS: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 TOOL_PROFILES: dict[str, dict] = {
     "minimal": {
-        "allow": ["group:memory", "group:sessions"],
+        "allow": ["group:memory", "group:sessions", "group:explorer"],
     },
     "coding": {
-        "allow": ["group:fs", "group:shell", "group:memory"],
+        "allow": ["group:fs", "group:shell", "group:packages", "group:memory", "group:explorer"],
     },
     "full": {},  # No restrictions — everything allowed
 }

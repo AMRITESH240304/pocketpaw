@@ -7,20 +7,37 @@ Built-in tools: shell (command_execution), file editing (file_change),
 MCP tool calls, web search.
 
 Requires: OPENAI_API_KEY (or CODEX_API_KEY) env var and `codex` on PATH.
+
+Note: The prompt is passed via stdin (using "-" as the prompt arg) rather than
+as a command-line argument.  This avoids the Windows command-line length limit
+(~8191 chars).  Codex CLI added stdin support in v0.1.2504.
 """
 
 import asyncio
 import json
 import logging
+import os
+import re
 import shutil
+import subprocess
+import sys
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
-from pocketpaw.agents.backend import BackendInfo, Capability
+from pocketpaw.agents.backend import _DEFAULT_IDENTITY, BackendInfo, Capability
 from pocketpaw.agents.protocol import AgentEvent
 from pocketpaw.config import Settings
 
 logger = logging.getLogger(__name__)
+
+# Only allow safe characters in model names to prevent shell injection
+_MODEL_NAME_RE = re.compile(r"^[\w\-.:]+$")
+
+# 10 MiB buffer for subprocess stdout. Codex CLI emits NDJSON events that can
+# exceed the asyncio default of 64 KiB (e.g., large MCP tool results from
+# Playwright, code completions, etc.).
+_SUBPROCESS_BUFFER_LIMIT = 10 * 1024 * 1024
 
 
 class CodexCLIBackend:
@@ -56,10 +73,11 @@ class CodexCLIBackend:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._stop_flag = False
-        self._cli_available = shutil.which("codex") is not None
+        self._codex_path = shutil.which("codex")
+        self._cli_available = self._codex_path is not None
         self._process: asyncio.subprocess.Process | None = None
         if self._cli_available:
-            logger.info("Codex CLI found on PATH")
+            logger.info("Codex CLI found: %s", self._codex_path)
         else:
             logger.warning("Codex CLI not found — install with: npm install -g @openai/codex")
 
@@ -94,11 +112,31 @@ class CodexCLIBackend:
 
         self._stop_flag = False
 
+        # Temp file for system prompt injection (cleaned up in finally block)
+        _instructions_file = None
+
         try:
-            # Build the prompt: system prompt + history + user message
+            # Build the prompt: history + user message (sent via stdin).
+            # System prompt is passed via model_instructions_file so Codex CLI
+            # uses it as actual system-level instructions, replacing the
+            # built-in "You are Codex" identity.
+            effective_system = system_prompt or _DEFAULT_IDENTITY
+
+            # Write system prompt to a temp file for model_instructions_file
+            import tempfile
+
+            _instructions_file = tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".md",
+                prefix="paw_codex_instructions_",
+                delete=False,
+                encoding="utf-8",
+            )
+            _instructions_file.write(effective_system)
+            _instructions_file.close()
+            instructions_path = _instructions_file.name
+
             prompt_parts = []
-            if system_prompt:
-                prompt_parts.append(f"[System Instructions]\n{system_prompt}\n")
             if history:
                 prompt_parts.append(self._inject_history("", history).strip())
             prompt_parts.append(message)
@@ -106,21 +144,76 @@ class CodexCLIBackend:
 
             model = self.settings.codex_cli_model or "gpt-5.3-codex"
 
-            cmd = [
-                "codex",
+            # Validate model name to prevent shell injection (C1)
+            if not _MODEL_NAME_RE.match(model):
+                yield AgentEvent(
+                    type="error",
+                    content=f"Invalid model name: {model!r}. "
+                    "Only alphanumeric characters, hyphens, dots, colons, "
+                    "and underscores are allowed.",
+                )
+                return
+
+            codex_bin = self._codex_path
+            # Use "-" as the prompt arg so the actual prompt is read from
+            # stdin.  This avoids the Windows command-line length limit
+            # (~8191 chars) which is easily hit when system prompts and
+            # conversation history are included.
+            args = [
                 "exec",
                 "--json",
                 "--full-auto",
+                "-c",
+                f"model_instructions_file={instructions_path}",
                 "--model",
                 model,
-                full_prompt,
+                "-",
             ]
 
-            self._process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            # Explicitly pass env so runtime key changes are visible
+            proc_env = os.environ.copy()
+
+            if sys.platform == "win32":
+                # On Windows, npm global installs are .cmd wrappers that
+                # create_subprocess_exec cannot run directly. Use shell mode.
+                shell_cmd = subprocess.list2cmdline([codex_bin, *args])
+                self._process = await asyncio.create_subprocess_shell(
+                    shell_cmd,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=proc_env,
+                    limit=_SUBPROCESS_BUFFER_LIMIT,
+                )
+            else:
+                self._process = await asyncio.create_subprocess_exec(
+                    codex_bin,
+                    *args,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=proc_env,
+                    limit=_SUBPROCESS_BUFFER_LIMIT,
+                )
+
+            # Feed the prompt via stdin and close to signal EOF
+            if self._process.stdin:
+                try:
+                    self._process.stdin.write(full_prompt.encode("utf-8"))
+                    await self._process.stdin.drain()
+                    self._process.stdin.close()
+                    await self._process.stdin.wait_closed()
+                except (BrokenPipeError, ConnectionResetError):
+                    # Codex CLI crashed before reading stdin
+                    stderr_out = ""
+                    if self._process.stderr:
+                        stderr_bytes = await self._process.stderr.read()
+                        stderr_out = stderr_bytes.decode("utf-8", errors="replace").strip()
+                    msg = "Codex CLI exited before reading the prompt"
+                    if stderr_out:
+                        msg += f": {stderr_out[:200]}"
+                    yield AgentEvent(type="error", content=msg)
+                    return
 
             if self._process.stdout is None:
                 yield AgentEvent(type="error", content="Failed to capture Codex CLI stdout")
@@ -158,6 +251,8 @@ class CodexCLIBackend:
                                 "input_tokens": usage.get("input_tokens", 0),
                                 "output_tokens": usage.get("output_tokens", 0),
                                 "cached_input_tokens": usage.get("cached_input_tokens", 0),
+                                "model": self.settings.codex_cli_model or "codex-mini-latest",
+                                "backend": "codex_cli",
                             },
                         )
 
@@ -262,9 +357,21 @@ class CodexCLIBackend:
             self._process = None
             yield AgentEvent(type="done", content="")
 
+        except (asyncio.LimitOverrunError, asyncio.IncompleteReadError) as e:
+            logger.warning("Codex CLI session terminated: stdout buffer exceeded: %s", e)
+            self._process = None
+            yield AgentEvent(type="error", content="Codex CLI output exceeded buffer limit")
+            yield AgentEvent(type="done", content="")
         except Exception as e:
             logger.error("Codex CLI error: %s", e)
             yield AgentEvent(type="error", content=f"Codex CLI error: {e}")
+        finally:
+            # Clean up temp instructions file
+            if _instructions_file is not None:
+                try:
+                    Path(_instructions_file.name).unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     async def stop(self) -> None:
         self._stop_flag = True

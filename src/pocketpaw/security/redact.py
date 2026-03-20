@@ -14,6 +14,11 @@ REDACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "OpenAI API Key",
         re.compile(r"\bsk-[a-zA-Z0-9]{20,}\b", re.IGNORECASE),
     ),
+    # OpenRouter API keys (sk-or-v1-...)
+    (
+        "OpenRouter API Key",
+        re.compile(r"\bsk-or-v1-[a-zA-Z0-9]{12,}\b", re.IGNORECASE),
+    ),
     # Anthropic API keys (sk-ant-...)
     (
         "Anthropic API Key",
@@ -155,4 +160,24 @@ def redact_output(text: str) -> str:
             # For patterns without capture groups, replace entire match
             redacted = pattern.sub("[REDACTED]", redacted)
 
+    return redacted
+
+
+# ---------------------------------------------------------------------------
+# Shared installer-error helper
+# ---------------------------------------------------------------------------
+
+_INSTALL_ERROR_MAX_LEN = 4000
+
+
+def safe_install_error(stderr: bytes) -> str:
+    """Redact and cap installer stderr before returning to API clients.
+
+    Used by both the dashboard and the ``/api/v1/backends`` router to sanitise
+    subprocess output so secrets are never leaked to callers.
+    """
+    raw = stderr.decode(errors="replace").strip()
+    redacted = redact_output(raw)
+    if len(redacted) > _INSTALL_ERROR_MAX_LEN:
+        return redacted[:_INSTALL_ERROR_MAX_LEN] + "\n...[truncated]"
     return redacted

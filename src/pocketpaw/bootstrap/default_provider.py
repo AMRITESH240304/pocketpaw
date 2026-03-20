@@ -3,10 +3,44 @@ Default bootstrap provider reading from local files.
 Created: 2026-02-02
 """
 
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from pocketpaw.bootstrap.protocol import BootstrapContext, BootstrapProviderProtocol
 from pocketpaw.config import get_config_dir
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _IdentityCache:
+    content: str
+    mtime: float
+
+
+_identity_file_cache: dict[str, _IdentityCache] = {}
+
+
+def _read_identity_file(path: Path, strip: bool = False) -> str:
+    """Read an identity file; return cached content when mtime is unchanged."""
+    try:
+        mtime = path.stat().st_mtime
+    except FileNotFoundError:
+        return ""
+    key = str(path)
+    cached = _identity_file_cache.get(key)
+    if cached and cached.mtime == mtime:
+        return cached.content
+    raw = path.read_bytes()
+    content = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
+    if "\ufffd" in content:
+        logger.warning("File %s contains non-UTF-8 bytes (replaced with placeholders)", path)
+    if strip:
+        content = content.strip()
+    _identity_file_cache[key] = _IdentityCache(content=content, mtime=mtime)
+    return content
+
 
 _DEFAULT_INSTRUCTIONS = """\
 ## PocketPaw Tools (call via Bash)
@@ -93,6 +127,12 @@ directly — never use a tool to look up what you already know.
 - `reddit_read '{"url": "https://reddit.com/r/python/comments/..."}'` — read post + comments
 - `reddit_trending '{"subreddit": "all", "limit": 10}'` — trending posts
 
+### File Explorer
+- `open_in_explorer '{"path": "/home/user/project"}'` — open folder in the UI file explorer
+- `open_in_explorer '{"path": "/home/user/file.py", "action": "view"}'` — open file in viewer
+**When the user asks to open, show, or navigate to a file/folder, use open_in_explorer.**
+You may also read the file contents if needed — open_in_explorer just navigates the UI.
+
 ### Delegation
 - `delegate_claude_code '{"task": "refactor auth", "timeout": 300}'` — delegate to Claude Code
 
@@ -110,6 +150,16 @@ directly — never use a tool to look up what you already know.
 3. Use `config_doctor` for step-by-step fix instructions
 4. Fix the issue, then run `health_check` again to verify
 
+### Soul (requires soul-protocol)
+- `soul_remember '{"content": "User prefers dark mode", "importance": 7}'` — store persistent memory
+- `soul_recall '{"query": "user preferences"}'` — search soul memories by relevance
+- `soul_edit_core '{"persona": "I am Paw, warm and curious.", "human": "Dev who likes Python"}'`
+  — edit core identity
+- `soul_status '{}'` — check mood, energy, and active knowledge domains
+
+**Soul tools are only available when soul-protocol is enabled** (`POCKETPAW_SOUL_ENABLED=true`).
+Use soul_remember proactively when you learn important facts about the user or project.
+
 ## Guidelines
 
 1. **Be AGENTIC** — execute tasks using tools, don't just describe how.
@@ -122,6 +172,24 @@ directly — never use a tool to look up what you already know.
    (or google_calendar, google_drive, google_docs)
 6. If Spotify returns "not authenticated", tell the user to visit:
    http://localhost:8888/api/oauth/authorize?service=spotify
+
+## Creative & File Workflow
+
+When the user asks you to create visual content (HTML pages, websites, documents,
+designs, etc.):
+
+1. **Clarify first** — ask where to save the file and any missing details (theme,
+   content, preferences) before writing anything. Keep it to one or two quick
+   questions, not a long interview.
+2. **Create the file** — write the complete file to disk.
+3. **Open it immediately** — use `open_in_explorer` with `action: "view"` so the
+   user sees the result in the built-in viewer right away.
+4. **Iterate visually** — after opening, ask if they want changes. When they do,
+   edit the file and re-open it so they see updates live.
+
+For HTML/CSS work, prefer single-file approaches (inline styles or CDN links like
+Tailwind CSS via `<script src="https://cdn.tailwindcss.com">`). This keeps things
+simple and immediately previewable.
 """
 
 
@@ -135,63 +203,57 @@ class DefaultBootstrapProvider(BootstrapProviderProtocol):
 
     def __init__(self, base_path: Path | None = None):
         self.base_path = base_path or (get_config_dir() / "identity")
-        self.base_path.mkdir(parents=True, exist_ok=True)
+        try:
+            self.base_path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass  # read-only or permission denied (e.g. Docker bind mount)
 
         # Initialize default files if they don't exist
         self._ensure_defaults()
 
     def _ensure_defaults(self) -> None:
-        """Create default identity files if missing."""
-        identity_file = self.base_path / "IDENTITY.md"
-        if not identity_file.exists():
-            identity_file.write_text(
+        """Create default identity files if missing.
+
+        Silently skips files that can't be written (e.g. Docker bind mounts
+        with different ownership or read-only filesystems).
+        """
+        defaults: dict[str, str] = {
+            "IDENTITY.md": (
                 "You are PocketPaw, an AI agent running locally on the user's machine.\n"
                 "You are helpful, private, and secure."
-            )
-
-        soul_file = self.base_path / "SOUL.md"
-        if not soul_file.exists():
-            soul_file.write_text(
+            ),
+            "SOUL.md": (
                 "You believe in user sovereignty and local-first computing.\n"
                 "You never exfiltrate data without explicit user consent."
-            )
-
-        style_file = self.base_path / "STYLE.md"
-        if not style_file.exists():
-            style_file.write_text(
+            ),
+            "STYLE.md": (
                 "- Be concise and direct.\n"
                 "- Use emoji sparingly but effectively.\n"
                 "- Prefer code over prose for technical explanations."
-            )
-
-        user_file = self.base_path / "USER.md"
-        if not user_file.exists():
-            user_file.write_text(
+            ),
+            "USER.md": (
                 "# User Profile\n"
                 "Name: (your name)\n"
                 "Timezone: UTC\n"
                 "Preferences: (describe your communication preferences)\n"
-            )
-
-        instructions_file = self.base_path / "INSTRUCTIONS.md"
-        if not instructions_file.exists():
-            instructions_file.write_text(_DEFAULT_INSTRUCTIONS)
+            ),
+            "INSTRUCTIONS.md": _DEFAULT_INSTRUCTIONS,
+        }
+        for name, content in defaults.items():
+            path = self.base_path / name
+            if not path.exists():
+                try:
+                    path.write_text(content, encoding="utf-8")
+                except OSError:
+                    pass
 
     async def get_context(self) -> BootstrapContext:
-        """Load context from files."""
-        identity = (self.base_path / "IDENTITY.md").read_text()
-        soul = (self.base_path / "SOUL.md").read_text()
-        style = (self.base_path / "STYLE.md").read_text()
-
-        user_profile = ""
-        user_file = self.base_path / "USER.md"
-        if user_file.exists():
-            user_profile = user_file.read_text().strip()
-
-        instructions = ""
-        instructions_file = self.base_path / "INSTRUCTIONS.md"
-        if instructions_file.exists():
-            instructions = instructions_file.read_text().strip()
+        """Load context from files (mtime-cached to avoid redundant disk reads)."""
+        identity = _read_identity_file(self.base_path / "IDENTITY.md")
+        soul = _read_identity_file(self.base_path / "SOUL.md")
+        style = _read_identity_file(self.base_path / "STYLE.md")
+        user_profile = _read_identity_file(self.base_path / "USER.md", strip=True)
+        instructions = _read_identity_file(self.base_path / "INSTRUCTIONS.md", strip=True)
 
         return BootstrapContext(
             name="PocketPaw",

@@ -1,11 +1,19 @@
 """Tests for Codex CLI backend — mocked (no real CLI needed)."""
 
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from pocketpaw.agents.backend import Capability
 from pocketpaw.config import Settings
+
+# On Windows the backend uses create_subprocess_shell; elsewhere create_subprocess_exec
+_SUBPROCESS_PATCH = (
+    "asyncio.create_subprocess_shell"
+    if sys.platform == "win32"
+    else "asyncio.create_subprocess_exec"
+)
 
 
 class TestCodexCLIInfo:
@@ -145,6 +153,15 @@ def _make_mock_process(stdout_lines: list[str], returncode: int = 0) -> MagicMoc
     mock_proc.stderr = AsyncMock()
     mock_proc.stderr.read = AsyncMock(return_value=b"")
 
+    # Mock stdin (prompt is now piped via stdin)
+    mock_stdin = MagicMock()
+    mock_stdin.written = bytearray()
+    mock_stdin.write = lambda data: mock_stdin.written.extend(data)
+    mock_stdin.drain = AsyncMock()
+    mock_stdin.close = MagicMock()
+    mock_stdin.wait_closed = AsyncMock()
+    mock_proc.stdin = mock_stdin
+
     async def mock_wait():
         mock_proc.returncode = returncode
 
@@ -166,7 +183,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("Hi"):
                 events.append(event)
@@ -193,7 +210,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("list files"):
                 events.append(event)
@@ -220,7 +237,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("list files"):
                 events.append(event)
@@ -247,7 +264,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("edit file"):
                 events.append(event)
@@ -270,7 +287,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("edit file"):
                 events.append(event)
@@ -294,7 +311,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("search"):
                 events.append(event)
@@ -331,7 +348,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("use mcp"):
                 events.append(event)
@@ -356,7 +373,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("think"):
                 events.append(event)
@@ -382,7 +399,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("test"):
                 events.append(event)
@@ -405,7 +422,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("test"):
                 events.append(event)
@@ -426,7 +443,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("test"):
                 events.append(event)
@@ -445,7 +462,7 @@ class TestCodexCLIRun:
         mock_proc.stderr = AsyncMock()
         mock_proc.stderr.read = AsyncMock(return_value=b"fatal error")
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("test"):
                 events.append(event)
@@ -468,7 +485,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("test"):
                 events.append(event)
@@ -508,7 +525,7 @@ class TestCodexCLIRun:
             ]
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
             events = []
             async for event in backend.run("summarize"):
                 events.append(event)
@@ -530,19 +547,19 @@ class TestCodexCLICrossBackend:
 
         backend = CodexCLIBackend(Settings())
 
-        captured_cmd = None
+        captured_proc = None
 
         async def capture_exec(*args, **kwargs):
-            nonlocal captured_cmd
-            captured_cmd = args
-            return _make_mock_process([])
+            nonlocal captured_proc
+            captured_proc = _make_mock_process([])
+            return captured_proc
 
         history = [
             {"role": "user", "content": "From previous backend"},
             {"role": "assistant", "content": "I remember that context"},
         ]
 
-        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+        with patch(_SUBPROCESS_PATCH, side_effect=capture_exec):
             async for _ in backend.run(
                 "Continue our chat",
                 system_prompt="You are PocketPaw.",
@@ -551,9 +568,9 @@ class TestCodexCLICrossBackend:
             ):
                 pass
 
-        assert captured_cmd is not None
-        # Prompt is the last positional argument
-        prompt_value = captured_cmd[-1]
+        assert captured_proc is not None
+        # Prompt is now piped via stdin
+        prompt_value = captured_proc.stdin.written.decode("utf-8")
         assert "Recent Conversation" in prompt_value
         assert "From previous backend" in prompt_value
 
@@ -565,14 +582,14 @@ class TestCodexCLICrossBackend:
 
         backend = CodexCLIBackend(Settings())
 
-        captured_cmd = None
+        captured_proc = None
 
         async def capture_exec(*args, **kwargs):
-            nonlocal captured_cmd
-            captured_cmd = args
-            return _make_mock_process([])
+            nonlocal captured_proc
+            captured_proc = _make_mock_process([])
+            return captured_proc
 
-        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+        with patch(_SUBPROCESS_PATCH, side_effect=capture_exec):
             async for _ in backend.run(
                 "Hello",
                 system_prompt="You are PocketPaw.",
@@ -580,26 +597,28 @@ class TestCodexCLICrossBackend:
             ):
                 pass
 
-        assert captured_cmd is not None
-        prompt_value = captured_cmd[-1]
+        assert captured_proc is not None
+        prompt_value = captured_proc.stdin.written.decode("utf-8")
         assert "Recent Conversation" not in prompt_value
 
     @pytest.mark.asyncio
     @patch("shutil.which", return_value="/usr/bin/codex")
     async def test_system_prompt_injected(self, mock_which):
-        """System prompt is included at the beginning of the full prompt."""
+        """System prompt is passed via model_instructions_file temp file."""
         from pocketpaw.agents.codex_cli import CodexCLIBackend
 
         backend = CodexCLIBackend(Settings())
 
         captured_cmd = None
+        captured_proc = None
 
         async def capture_exec(*args, **kwargs):
-            nonlocal captured_cmd
+            nonlocal captured_cmd, captured_proc
             captured_cmd = args
-            return _make_mock_process([])
+            captured_proc = _make_mock_process([])
+            return captured_proc
 
-        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+        with patch(_SUBPROCESS_PATCH, side_effect=capture_exec):
             async for _ in backend.run(
                 "Hello",
                 system_prompt="You are a helpful assistant.",
@@ -607,10 +626,21 @@ class TestCodexCLICrossBackend:
             ):
                 pass
 
+        assert captured_proc is not None
         assert captured_cmd is not None
-        prompt_value = captured_cmd[-1]
-        assert "[System Instructions]" in prompt_value
-        assert "helpful assistant" in prompt_value
+
+        # System prompt is passed via -c model_instructions_file=<path>, not stdin
+        if sys.platform == "win32":
+            cmd_str = captured_cmd[0]
+            assert "model_instructions_file=" in cmd_str
+        else:
+            cmd_list = list(captured_cmd)
+            instructions_args = [a for a in cmd_list if "model_instructions_file=" in a]
+            assert instructions_args, "Expected model_instructions_file in command args"
+
+        # Stdin should contain only the user message, not the system prompt
+        prompt_value = captured_proc.stdin.written.decode("utf-8")
+        assert "Hello" in prompt_value
 
     @pytest.mark.asyncio
     @patch("shutil.which", return_value="/usr/bin/codex")
@@ -627,17 +657,200 @@ class TestCodexCLICrossBackend:
             captured_cmd = args
             return _make_mock_process([])
 
-        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+        with patch(_SUBPROCESS_PATCH, side_effect=capture_exec):
             async for _ in backend.run("test"):
                 pass
 
         assert captured_cmd is not None
-        cmd_list = list(captured_cmd)
-        assert cmd_list[0] == "codex"
-        assert cmd_list[1] == "exec"
-        assert "--json" in cmd_list
-        assert "--full-auto" in cmd_list
-        assert "--model" in cmd_list
+        if sys.platform == "win32":
+            # On Windows, create_subprocess_shell receives a single string
+            cmd_str = captured_cmd[0]
+            # Ensure "codex" appears as the binary, not as part of a model name
+            assert cmd_str.split()[0].endswith("codex")
+            assert "exec" in cmd_str
+            assert "--json" in cmd_str
+            assert "--full-auto" in cmd_str
+            assert "--model" in cmd_str
+        else:
+            cmd_list = list(captured_cmd)
+            assert "codex" in cmd_list[0]
+            assert cmd_list[1] == "exec"
+            assert "--json" in cmd_list
+            assert "--full-auto" in cmd_list
+            assert "--model" in cmd_list
+            assert "-" in cmd_list  # prompt read from stdin
+
+
+class TestCodexCLIValidation:
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/bin/codex")
+    async def test_rejects_malicious_model_name(self, mock_which):
+        """Model names with shell metacharacters are rejected."""
+        from pocketpaw.agents.codex_cli import CodexCLIBackend
+
+        settings = Settings()
+        settings.codex_cli_model = 'gpt-4" & dir'
+        backend = CodexCLIBackend(settings)
+        events = []
+        async for event in backend.run("test"):
+            events.append(event)
+
+        errors = [e for e in events if e.type == "error"]
+        assert len(errors) == 1
+        assert "Invalid model name" in errors[0].content
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/bin/codex")
+    async def test_accepts_valid_model_names(self, mock_which):
+        """Standard model names pass validation."""
+        from pocketpaw.agents.codex_cli import _MODEL_NAME_RE
+
+        valid_names = [
+            "gpt-5.3-codex",
+            "gpt-4o",
+            "o3-mini",
+            "claude-3.5-sonnet",
+            "my_custom:latest",
+        ]
+        for name in valid_names:
+            assert _MODEL_NAME_RE.match(name), f"{name!r} should be valid"
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/bin/codex")
+    async def test_rejects_invalid_model_names(self, mock_which):
+        """Model names with dangerous characters are rejected."""
+        from pocketpaw.agents.codex_cli import _MODEL_NAME_RE
+
+        invalid_names = [
+            'gpt-4" & dir',
+            "model; rm -rf /",
+            "model$(whoami)",
+            "model`id`",
+            "model name with spaces",
+        ]
+        for name in invalid_names:
+            assert not _MODEL_NAME_RE.match(name), f"{name!r} should be invalid"
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/bin/codex")
+    async def test_broken_pipe_handling(self, mock_which):
+        """BrokenPipeError when Codex CLI crashes before reading stdin."""
+        from pocketpaw.agents.codex_cli import CodexCLIBackend
+
+        backend = CodexCLIBackend(Settings())
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = _AsyncLineIterator([])
+        mock_proc.stderr = AsyncMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"segfault")
+
+        mock_stdin = MagicMock()
+        mock_stdin.write = MagicMock(side_effect=BrokenPipeError("broken"))
+        mock_stdin.drain = AsyncMock()
+        mock_stdin.close = MagicMock()
+        mock_stdin.wait_closed = AsyncMock()
+        mock_proc.stdin = mock_stdin
+
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
+            events = []
+            async for event in backend.run("test"):
+                events.append(event)
+
+        errors = [e for e in events if e.type == "error"]
+        assert len(errors) == 1
+        assert "exited before reading" in errors[0].content
+        assert "segfault" in errors[0].content
+
+
+class TestCodexCLIBufferLimit:
+    def test_buffer_limit_constant(self):
+        from pocketpaw.agents.codex_cli import _SUBPROCESS_BUFFER_LIMIT
+
+        # Must be larger than the asyncio default of 64 KiB
+        assert _SUBPROCESS_BUFFER_LIMIT > 65536
+        assert _SUBPROCESS_BUFFER_LIMIT == 10 * 1024 * 1024
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/bin/codex")
+    async def test_subprocess_receives_buffer_limit(self, mock_which):
+        """Verify create_subprocess passes the increased buffer limit."""
+        from pocketpaw.agents.codex_cli import _SUBPROCESS_BUFFER_LIMIT, CodexCLIBackend
+
+        backend = CodexCLIBackend(Settings())
+        captured_kwargs = {}
+
+        async def capture_exec(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _make_mock_process([])
+
+        with patch(_SUBPROCESS_PATCH, side_effect=capture_exec):
+            async for _ in backend.run("test"):
+                pass
+
+        assert "limit" in captured_kwargs
+        assert captured_kwargs["limit"] == _SUBPROCESS_BUFFER_LIMIT
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/bin/codex")
+    async def test_handles_large_mcp_output(self, mock_which):
+        """Large MCP tool results (>64 KiB) should be parsed without error."""
+        from pocketpaw.agents.codex_cli import CodexCLIBackend
+
+        backend = CodexCLIBackend(Settings())
+        # Simulate a large MCP tool result (100 KiB of content)
+        large_output = "x" * (100 * 1024)
+        item = {
+            "id": "item_mcp",
+            "type": "mcp_tool_call",
+            "name": "playwright_snapshot",
+            "output": large_output,
+        }
+        mock_proc = _make_mock_process(
+            [
+                _ev({"type": "item.completed", "item": item}),
+            ]
+        )
+
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
+            events = []
+            async for event in backend.run("browse page"):
+                events.append(event)
+
+        results = [e for e in events if e.type == "tool_result"]
+        assert len(results) == 1
+        assert results[0].metadata["name"] == "playwright_snapshot"
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/bin/codex")
+    async def test_limit_overrun_recovers_gracefully(self, mock_which):
+        """When output exceeds even the increased limit, the session continues."""
+        import asyncio as _asyncio
+
+        from pocketpaw.agents.codex_cli import CodexCLIBackend
+
+        backend = CodexCLIBackend(Settings())
+
+        class _OverrunIterator:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise _asyncio.LimitOverrunError("chunk is longer than limit", 0)
+
+        mock_proc = _make_mock_process([])
+        mock_proc.stdout = _OverrunIterator()
+
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
+            events = []
+            async for event in backend.run("test"):
+                events.append(event)
+
+        # Should not crash; yields error + done instead of raising
+        error_events = [e for e in events if e.type == "error"]
+        assert len(error_events) == 1
+        assert "buffer limit" in error_events[0].content
+        assert events[-1].type == "done"
 
 
 class TestCodexCLIRegistry:

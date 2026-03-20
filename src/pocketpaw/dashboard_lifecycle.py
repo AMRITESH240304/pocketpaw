@@ -47,11 +47,38 @@ async def broadcast_reminder(reminder: dict):
         except Exception:
             pass
 
+    # Persist reminder as an assistant message in every active WebSocket session
+    # so it survives session switches and page reloads.
+    reminder_text = reminder.get("text", "")
+    reminder_content = f"Reminder: {reminder_text}"
+    try:
+        from pocketpaw.memory import get_memory_manager
+
+        manager = get_memory_manager()
+        for chat_id in list(ws_adapter._connections.keys()):
+            session_key = f"websocket:{chat_id}"
+            try:
+                await manager.add_to_session(
+                    session_key=session_key,
+                    role="assistant",
+                    content=reminder_content,
+                    metadata={
+                        "reminder_id": reminder.get("id", ""),
+                        "type": "reminder",
+                    },
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to persist reminder to session %s", session_key, exc_info=True
+                )
+    except Exception:
+        logger.warning("Failed to persist reminder to session history", exc_info=True)
+
     # Push to notification channels
     try:
         from pocketpaw.bus.notifier import notify
 
-        await notify(f"Reminder: {reminder.get('text', '')}")
+        await notify(reminder_content)
     except Exception:
         pass
 
@@ -98,6 +125,25 @@ async def _broadcast_health_update(summary: dict):
                 active_connections.remove(ws)
 
 
+async def push_open_path(path: str, action: str = "navigate"):
+    """Push an open_path event to all connected WebSocket clients.
+
+    Parameters
+    ----------
+    path:
+        Absolute filesystem path to open.
+    action:
+        ``"navigate"`` to open a folder in the explorer, or
+        ``"view"`` to open a file in the viewer.
+    """
+    message = {"type": "open_path", "path": path, "action": action}
+    for ws in active_connections[:]:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
@@ -125,6 +171,14 @@ async def startup_event(
 
     # Auto-start configured channel adapters (respects per-channel autostart setting)
     settings = Settings.load()
+
+    # Start StatusTracker (agent state for external integrations)
+    from pocketpaw.dashboard_state import status_tracker
+    from pocketpaw.lifecycle import register as _register_lifecycle
+
+    status_tracker._max_concurrent = settings.max_concurrent_conversations
+    await status_tracker.subscribe()
+    _register_lifecycle("status_tracker", shutdown=status_tracker.unsubscribe)
     if _start_channel_adapter_fn:
         for ch in (
             "discord",
@@ -172,6 +226,24 @@ async def startup_event(
             logger.info("Recovered %d interrupted Deep Work project(s)", recovered)
     except Exception as e:
         logger.warning("Failed to recover interrupted projects: %s", e)
+
+    # Ensure built-in PawKits are installed
+    try:
+        from pathlib import Path
+
+        from pocketpaw.kits.store import get_kit_store
+
+        kit_store = get_kit_store()
+        installed = await kit_store.list_kits()
+        builtin_ids = {k.id for k in installed if k.config.meta.built_in}
+        if "project-orchestrator" not in builtin_ids:
+            yaml_path = Path(__file__).parent / "kits" / "builtins" / "project_orchestrator.yaml"
+            yaml_str = yaml_path.read_text(encoding="utf-8")
+            kit = await kit_store.install_kit(yaml_str, kit_id="project-orchestrator")
+            await kit_store.activate_kit(kit.id)
+            logger.info("Auto-installed built-in PawKit: Project Orchestrator")
+    except Exception as e:
+        logger.warning("Failed to ensure built-in PawKits: %s", e)
 
     # Wire MCP OAuth broadcast + auto-start enabled MCP servers (non-blocking)
     try:
