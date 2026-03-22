@@ -80,6 +80,7 @@ class DiscliAdapter(BaseChannelAdapter):
         self._conversation_last_active: dict[int, float] = {}
         self._eviction_task: asyncio.Task | None = None
         self._start_time: float = 0.0
+        self._disconnected: bool = False
 
     @property
     def channel(self) -> Channel:
@@ -386,6 +387,16 @@ class DiscliAdapter(BaseChannelAdapter):
                     asyncio.create_task(self._handle_message_event(data))
                 elif event == "slash_command":
                     asyncio.create_task(self._handle_slash_event(data))
+                elif event == "component_interaction":
+                    asyncio.create_task(self._handle_component_interaction(data))
+                elif event == "modal_submit":
+                    asyncio.create_task(self._handle_modal_submit(data))
+                elif event == "voice_state":
+                    self._handle_voice_state(data)
+                elif event == "disconnected":
+                    self._handle_disconnected(data)
+                elif event == "resumed":
+                    self._handle_resumed(data)
                 elif event == "error":
                     logger.error("discli serve error: %s", data.get("message"))
 
@@ -607,6 +618,97 @@ class DiscliAdapter(BaseChannelAdapter):
             metadata=metadata,
         )
         await self._publish_inbound(msg)
+
+    async def _handle_component_interaction(self, data: dict) -> None:
+        """Handle button click or select menu interaction from discli."""
+        user_id = data.get("user_id", "")
+        channel_id = data.get("channel_id", "")
+        guild_id = data.get("guild_id")
+        interaction_token = data.get("interaction_token", "")
+        custom_id = data.get("custom_id", "")
+
+        if not self._check_auth(guild_id, user_id, channel_id):
+            return
+
+        # Format content for agent: include custom_id and any selected values
+        values = data.get("values")
+        if values:
+            content = (
+                f"[Component interaction: {custom_id}] "
+                f"User selected: {', '.join(str(v) for v in values)}"
+            )
+        else:
+            content = f"[Component interaction: {custom_id}] User clicked button."
+
+        metadata: dict[str, Any] = {
+            "username": data.get("user", ""),
+            "guild_id": guild_id,
+            "interaction_token": interaction_token,
+            "component_interaction": True,
+            "custom_id": custom_id,
+        }
+        if data.get("message_id"):
+            metadata["message_id"] = data["message_id"]
+
+        msg = InboundMessage(
+            channel=Channel.DISCORD,
+            sender_id=user_id,
+            chat_id=channel_id,
+            content=content,
+            metadata=metadata,
+        )
+        await self._publish_inbound(msg)
+
+    async def _handle_modal_submit(self, data: dict) -> None:
+        """Handle modal form submission from discli."""
+        user_id = data.get("user_id", "")
+        channel_id = data.get("channel_id", "")
+        guild_id = data.get("guild_id")
+        interaction_token = data.get("interaction_token", "")
+        custom_id = data.get("custom_id", "")
+        fields = data.get("fields", {})
+
+        if not self._check_auth(guild_id, user_id, channel_id):
+            return
+
+        # Format fields for agent
+        field_lines = "\n".join(f"  {k}: {v}" for k, v in fields.items())
+        content = f"[Modal submitted: {custom_id}]\nForm data:\n{field_lines}"
+
+        metadata: dict[str, Any] = {
+            "username": data.get("user", ""),
+            "guild_id": guild_id,
+            "interaction_token": interaction_token,
+            "modal_submit": True,
+            "custom_id": custom_id,
+        }
+
+        msg = InboundMessage(
+            channel=Channel.DISCORD,
+            sender_id=user_id,
+            chat_id=channel_id,
+            content=content,
+            metadata=metadata,
+        )
+        await self._publish_inbound(msg)
+
+    def _handle_voice_state(self, data: dict) -> None:
+        """Log voice state changes. Not routed to agent."""
+        user_id = data.get("user_id", "")
+        action = data.get("action", "unknown")
+        channel_id = data.get("channel_id", "")
+        logger.debug("Voice state: user=%s action=%s channel=%s", user_id, action, channel_id)
+
+    def _handle_disconnected(self, data: dict) -> None:
+        """Handle discli disconnection event."""
+        reason = data.get("reason", "unknown")
+        logger.warning("Discord bot disconnected: %s", reason)
+        self._disconnected = True
+
+    def _handle_resumed(self, data: dict) -> None:
+        """Handle discli reconnection event."""
+        logger.info("Discord bot reconnected")
+        self._disconnected = False
 
     # ── Send (OutboundMessage → discli) ─────────────────────────────
 

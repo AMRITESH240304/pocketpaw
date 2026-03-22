@@ -197,6 +197,338 @@ TOOLS = [
             "required": ["server"],
         },
     },
+    {
+        "name": "discord_send_embed",
+        "description": "Send a message with a rich embed to a Discord channel.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "Channel name with # (e.g. #general)"},
+                "text": {
+                    "type": "string",
+                    "description": "Message text (can be empty if embed-only)",
+                    "default": "",
+                },
+                "embed_title": {"type": "string", "description": "Embed title"},
+                "embed_desc": {"type": "string", "description": "Embed description"},
+                "embed_color": {
+                    "type": "string",
+                    "description": "Hex color (e.g. ff0000)",
+                    "default": "",
+                },
+                "embed_footer": {"type": "string", "description": "Footer text", "default": ""},
+                "embed_image": {"type": "string", "description": "Image URL", "default": ""},
+                "embed_thumbnail": {
+                    "type": "string",
+                    "description": "Thumbnail URL",
+                    "default": "",
+                },
+            },
+            "required": ["channel", "embed_title"],
+        },
+    },
+    {
+        "name": "discord_channel_edit",
+        "description": "Edit a channel's name, topic, slowmode, or NSFW flag.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Server name"},
+                "channel": {"type": "string", "description": "Channel name with #"},
+                "name": {"type": "string", "description": "New channel name", "default": ""},
+                "topic": {"type": "string", "description": "New channel topic", "default": ""},
+                "slowmode": {
+                    "type": "integer",
+                    "description": "Slowmode seconds (0 to disable)",
+                    "default": -1,
+                },
+                "nsfw": {"type": "boolean", "description": "Set NSFW flag"},
+            },
+            "required": ["server", "channel"],
+        },
+    },
+    {
+        "name": "discord_channel_set_permissions",
+        "description": "Set permission overwrites for a role or member on a channel.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Server name"},
+                "channel": {"type": "string", "description": "Channel name with #"},
+                "target": {"type": "string", "description": "Role name or user ID"},
+                "target_type": {
+                    "type": "string",
+                    "description": "'role' or 'member'",
+                    "default": "role",
+                },
+                "allow": {"type": "string", "description": "Comma-separated permissions to allow"},
+                "deny": {"type": "string", "description": "Comma-separated permissions to deny"},
+            },
+            "required": ["server", "channel", "target"],
+        },
+    },
+    {
+        "name": "discord_forum_post",
+        "description": "Create a post in a forum channel.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Server name"},
+                "channel": {"type": "string", "description": "Forum channel name with #"},
+                "title": {"type": "string", "description": "Post title"},
+                "content": {"type": "string", "description": "Post content"},
+            },
+            "required": ["server", "channel", "title", "content"],
+        },
+    },
+    {
+        "name": "discord_thread_archive",
+        "description": "Archive a thread.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string", "description": "Thread ID"},
+            },
+            "required": ["thread_id"],
+        },
+    },
+    {
+        "name": "discord_thread_unarchive",
+        "description": "Unarchive a thread.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string", "description": "Thread ID"},
+            },
+            "required": ["thread_id"],
+        },
+    },
+    {
+        "name": "discord_thread_rename",
+        "description": "Rename a thread.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string", "description": "Thread ID"},
+                "name": {"type": "string", "description": "New thread name"},
+            },
+            "required": ["thread_id", "name"],
+        },
+    },
+    {
+        "name": "discord_thread_add_member",
+        "description": "Add a member to a thread.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string", "description": "Thread ID"},
+                "user_id": {"type": "string", "description": "User ID to add"},
+            },
+            "required": ["thread_id", "user_id"],
+        },
+    },
+    {
+        "name": "discord_thread_remove_member",
+        "description": "Remove a member from a thread.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string", "description": "Thread ID"},
+                "user_id": {"type": "string", "description": "User ID to remove"},
+            },
+            "required": ["thread_id", "user_id"],
+        },
+    },
+    {
+        "name": "discord_member_timeout",
+        "description": "Timeout (mute) a member for a specified duration. Use 0 to remove timeout.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Server name"},
+                "user": {"type": "string", "description": "Username or user ID"},
+                "seconds": {
+                    "type": "integer",
+                    "description": "Timeout duration in seconds (0 to remove)",
+                },
+                "reason": {"type": "string", "description": "Reason for timeout", "default": ""},
+            },
+            "required": ["server", "user", "seconds"],
+        },
+    },
+    {
+        "name": "discord_role_edit",
+        "description": "Edit a role's name, color, hoist, or mentionable properties.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Server name"},
+                "role": {"type": "string", "description": "Role name"},
+                "name": {"type": "string", "description": "New role name", "default": ""},
+                "color": {
+                    "type": "string",
+                    "description": "Hex color (e.g. ff0000)",
+                    "default": "",
+                },
+                "hoist": {"type": "boolean", "description": "Show role separately in member list"},
+                "mentionable": {
+                    "type": "boolean",
+                    "description": "Allow anyone to mention this role",
+                },
+            },
+            "required": ["server", "role"],
+        },
+    },
+    {
+        "name": "discord_reaction_users",
+        "description": "List users who reacted with a specific emoji on a message.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "Channel name with #"},
+                "message_id": {"type": "string", "description": "Message ID"},
+                "emoji": {"type": "string", "description": "Emoji to check"},
+                "limit": {"type": "integer", "description": "Max users to return", "default": 50},
+            },
+            "required": ["channel", "message_id", "emoji"],
+        },
+    },
+    {
+        "name": "discord_poll_results",
+        "description": "Get current results of a poll.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "Channel name with #"},
+                "message_id": {"type": "string", "description": "Message ID of the poll"},
+            },
+            "required": ["channel", "message_id"],
+        },
+    },
+    {
+        "name": "discord_poll_end",
+        "description": "End a poll early.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "Channel name with #"},
+                "message_id": {"type": "string", "description": "Message ID of the poll"},
+            },
+            "required": ["channel", "message_id"],
+        },
+    },
+    {
+        "name": "discord_webhook_list",
+        "description": "List webhooks in a server or channel.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Server name"},
+                "channel": {
+                    "type": "string",
+                    "description": "Channel name with # (optional, filters to channel)",
+                    "default": "",
+                },
+            },
+            "required": ["server"],
+        },
+    },
+    {
+        "name": "discord_webhook_create",
+        "description": "Create a webhook in a channel.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Server name"},
+                "channel": {"type": "string", "description": "Channel name with #"},
+                "name": {"type": "string", "description": "Webhook name"},
+            },
+            "required": ["server", "channel", "name"],
+        },
+    },
+    {
+        "name": "discord_webhook_delete",
+        "description": "Delete a webhook by ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Server name"},
+                "webhook_id": {"type": "string", "description": "Webhook ID to delete"},
+            },
+            "required": ["server", "webhook_id"],
+        },
+    },
+    {
+        "name": "discord_event_list",
+        "description": "List scheduled events in a server.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Server name"},
+            },
+            "required": ["server"],
+        },
+    },
+    {
+        "name": "discord_event_create",
+        "description": "Create a scheduled event in a server.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Server name"},
+                "name": {"type": "string", "description": "Event name"},
+                "start_time": {"type": "string", "description": "Start time (ISO 8601)"},
+                "description": {
+                    "type": "string",
+                    "description": "Event description",
+                    "default": "",
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Location (for external events)",
+                    "default": "",
+                },
+                "end_time": {
+                    "type": "string",
+                    "description": "End time (ISO 8601)",
+                    "default": "",
+                },
+                "channel": {
+                    "type": "string",
+                    "description": "Voice channel (for voice events)",
+                    "default": "",
+                },
+            },
+            "required": ["server", "name", "start_time"],
+        },
+    },
+    {
+        "name": "discord_event_delete",
+        "description": "Delete a scheduled event.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Server name"},
+                "event_id": {"type": "string", "description": "Event ID to delete"},
+            },
+            "required": ["server", "event_id"],
+        },
+    },
+    {
+        "name": "discord_message_bulk_delete",
+        "description": "Bulk delete messages in a channel (up to 100, max 14 days old).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "Channel name with #"},
+                "count": {
+                    "type": "integer",
+                    "description": "Number of messages to delete (max 100)",
+                },
+            },
+            "required": ["channel", "count"],
+        },
+    },
 ]
 
 
@@ -241,6 +573,121 @@ def _build_command(tool_name: str, args: dict) -> str:
             return f"role assign {shlex.quote(args['server'])} {args['username']} {args['role']}"
         case "discord_server_info":
             return f"server info {shlex.quote(args['server'])}"
+        case "discord_send_embed":
+            cmd = f"message send {args['channel']}"
+            text = args.get("text", "")
+            if text:
+                cmd += f" {shlex.quote(text)}"
+            else:
+                cmd += ' ""'
+            cmd += f" --embed-title {shlex.quote(args['embed_title'])}"
+            if args.get("embed_desc"):
+                cmd += f" --embed-desc {shlex.quote(args['embed_desc'])}"
+            if args.get("embed_color"):
+                cmd += f" --embed-color {args['embed_color']}"
+            if args.get("embed_footer"):
+                cmd += f" --embed-footer {shlex.quote(args['embed_footer'])}"
+            if args.get("embed_image"):
+                cmd += f" --embed-image {shlex.quote(args['embed_image'])}"
+            if args.get("embed_thumbnail"):
+                cmd += f" --embed-thumbnail {shlex.quote(args['embed_thumbnail'])}"
+            return cmd
+        case "discord_channel_edit":
+            cmd = f"channel edit {shlex.quote(args['server'])} {args['channel']}"
+            if args.get("name"):
+                cmd += f" --name {shlex.quote(args['name'])}"
+            if args.get("topic"):
+                cmd += f" --topic {shlex.quote(args['topic'])}"
+            if args.get("slowmode", -1) >= 0:
+                cmd += f" --slowmode {args['slowmode']}"
+            if "nsfw" in args:
+                cmd += " --nsfw" if args["nsfw"] else ""
+            return cmd
+        case "discord_channel_set_permissions":
+            cmd = (
+                f"channel set-permissions {shlex.quote(args['server'])} {args['channel']}"
+                f" {shlex.quote(args['target'])}"
+            )
+            if args.get("target_type"):
+                cmd += f" --target-type {args['target_type']}"
+            if args.get("allow"):
+                cmd += f" --allow {shlex.quote(args['allow'])}"
+            if args.get("deny"):
+                cmd += f" --deny {shlex.quote(args['deny'])}"
+            return cmd
+        case "discord_forum_post":
+            return (
+                f"channel forum-post {shlex.quote(args['server'])} {args['channel']}"
+                f" {shlex.quote(args['title'])} {shlex.quote(args['content'])}"
+            )
+        case "discord_thread_archive":
+            return f"thread archive {args['thread_id']}"
+        case "discord_thread_unarchive":
+            return f"thread unarchive {args['thread_id']}"
+        case "discord_thread_rename":
+            return f"thread rename {args['thread_id']} {shlex.quote(args['name'])}"
+        case "discord_thread_add_member":
+            return f"thread add-member {args['thread_id']} {args['user_id']}"
+        case "discord_thread_remove_member":
+            return f"thread remove-member {args['thread_id']} {args['user_id']}"
+        case "discord_member_timeout":
+            cmd = f"member timeout {shlex.quote(args['server'])} {args['user']} {args['seconds']}"
+            if args.get("reason"):
+                cmd += f" --reason {shlex.quote(args['reason'])}"
+            return cmd
+        case "discord_role_edit":
+            cmd = f"role edit {shlex.quote(args['server'])} {shlex.quote(args['role'])}"
+            if args.get("name"):
+                cmd += f" --name {shlex.quote(args['name'])}"
+            if args.get("color"):
+                cmd += f" --color {args['color']}"
+            if "hoist" in args:
+                cmd += " --hoist" if args["hoist"] else ""
+            if "mentionable" in args:
+                cmd += " --mentionable" if args["mentionable"] else ""
+            return cmd
+        case "discord_reaction_users":
+            limit = args.get("limit", 50)
+            return (
+                f"reaction users {args['channel']} {args['message_id']}"
+                f" {args['emoji']} --limit {limit}"
+            )
+        case "discord_poll_results":
+            return f"poll results {args['channel']} {args['message_id']}"
+        case "discord_poll_end":
+            return f"poll end {args['channel']} {args['message_id']}"
+        case "discord_webhook_list":
+            cmd = f"webhook list {shlex.quote(args['server'])}"
+            if args.get("channel"):
+                cmd += f" {args['channel']}"
+            return cmd
+        case "discord_webhook_create":
+            return (
+                f"webhook create {shlex.quote(args['server'])} {args['channel']}"
+                f" {shlex.quote(args['name'])}"
+            )
+        case "discord_webhook_delete":
+            return f"webhook delete {shlex.quote(args['server'])} {args['webhook_id']} --yes"
+        case "discord_event_list":
+            return f"event list {shlex.quote(args['server'])}"
+        case "discord_event_create":
+            cmd = (
+                f"event create {shlex.quote(args['server'])}"
+                f" {shlex.quote(args['name'])} {shlex.quote(args['start_time'])}"
+            )
+            if args.get("description"):
+                cmd += f" --description {shlex.quote(args['description'])}"
+            if args.get("location"):
+                cmd += f" --location {shlex.quote(args['location'])}"
+            if args.get("end_time"):
+                cmd += f" --end-time {shlex.quote(args['end_time'])}"
+            if args.get("channel"):
+                cmd += f" --channel {args['channel']}"
+            return cmd
+        case "discord_event_delete":
+            return f"event delete {shlex.quote(args['server'])} {args['event_id']} --yes"
+        case "discord_message_bulk_delete":
+            return f"message bulk-delete {args['channel']} {args['count']} --yes"
         case _:
             raise ValueError(f"Unknown tool: {tool_name}")
 
