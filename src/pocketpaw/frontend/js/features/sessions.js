@@ -20,7 +20,8 @@ window.PocketPaw.Sessions = {
             sessionSearch: '',
             sessionsCollapsed: false,
             editingSessionId: null,
-            editingSessionTitle: ''
+            editingSessionTitle: '',
+            deletingSessionId: null
         };
     },
 
@@ -119,6 +120,31 @@ window.PocketPaw.Sessions = {
                 } catch (e) {
                     console.error('[Sessions] Delete failed:', e);
                 }
+            },
+
+            /**
+             * Show delete confirmation dialog for a session
+             */
+            confirmDeleteSession(id, event) {
+                if (event) event.stopPropagation();
+                this.deletingSessionId = id;
+                this.$nextTick(() => {
+                    if (window.refreshIcons) window.refreshIcons();
+                });
+            },
+
+            /**
+             * Export an arbitrary session (by id) as JSON or Markdown download
+             */
+            exportSessionById(id, format) {
+                const url = `/api/memory/session/export?id=${encodeURIComponent(id)}&format=${format}`;
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = '';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                this.showToast(`Exported as ${format.toUpperCase()}`, 'success');
             },
 
             /**
