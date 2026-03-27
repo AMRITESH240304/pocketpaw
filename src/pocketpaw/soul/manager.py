@@ -114,18 +114,20 @@ class SoulManager:
         self.soul_dir.mkdir(parents=True, exist_ok=True)
 
         soul_path = self.soul_file
-
-        # Auto-import: if a bundled config (e.g. ~/paw.yaml) exists, always
-        # prefer it over an existing .soul file or default birth. This lets
-        # Coolify deployments replace the soul just by updating paw.yaml.
-        auto_import = self._find_auto_import_config()
-        if auto_import:
-            logger.info("Auto-importing soul config from %s", auto_import)
-            self.soul = await Soul.birth_from_config(auto_import)
-        elif soul_path.exists():
+        if soul_path.exists():
             self.soul = await self._try_awaken(Soul, soul_path, engine=engine)
+        else:
+            # Auto-import bundled soul config (e.g. ~/paw.yaml baked into Docker image)
+            # if no .soul file exists yet. This makes first-run on Coolify work
+            # without manual import.
+            auto_import = self._find_auto_import_config()
+            if auto_import:
+                logger.info("Auto-importing soul config from %s", auto_import)
+                self.soul = await Soul.birth_from_config(auto_import)
+            else:
+                self.soul = await self._birth_soul(Soul, engine=engine)
 
-        # Fallback: if nothing worked, birth from settings
+        # Fallback: if awaken returned None (corrupt file), birth fresh
         if self.soul is None:
             self.soul = await self._birth_soul(Soul, engine=engine)
 
