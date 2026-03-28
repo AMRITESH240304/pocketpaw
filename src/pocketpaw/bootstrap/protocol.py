@@ -56,6 +56,7 @@ class BootstrapContext:
             identity_lines.append(self.user_profile)
         identity_lines.append("</identity>")
         parts.append("\n".join(identity_lines))
+        return "\n\n".join(parts)
 
     def to_identity_block(self) -> str:
         """Get just the <identity> block for periodic reinforcement."""
