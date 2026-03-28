@@ -17,7 +17,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class TickSnapshot:
     """Immutable snapshot of world state at a specific tick.
 
@@ -71,7 +71,7 @@ class SimulationClock:
     def __init__(self) -> None:
         self._current_tick: int = 0
         self._snapshots: list[TickSnapshot] = []
-        self._tick_event: asyncio.Event = asyncio.Event()
+        self._tick_cond: asyncio.Condition = asyncio.Condition()
 
     @property
     def current_tick(self) -> int:
@@ -81,8 +81,8 @@ class SimulationClock:
     async def advance(self) -> int:
         """Advance one tick. Returns the new tick number."""
         self._current_tick += 1
-        self._tick_event.set()
-        self._tick_event.clear()
+        async with self._tick_cond:
+            self._tick_cond.notify_all()
         logger.debug("SimulationClock advanced to tick %d", self._current_tick)
         return self._current_tick
 
@@ -102,9 +102,8 @@ class SimulationClock:
         Args:
             tick: The tick number to wait for.
         """
-        while self._current_tick < tick:
-            self._tick_event.clear()
-            await self._tick_event.wait()
+        async with self._tick_cond:
+            await self._tick_cond.wait_for(lambda: self._current_tick >= tick)
 
     def record_snapshot(self, snapshot: TickSnapshot) -> None:
         """Record a world-state snapshot for the current tick.
