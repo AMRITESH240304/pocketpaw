@@ -1,0 +1,50 @@
+# Stripe connector — payment data integration.
+# Created: 2026-03-27
+
+name: stripe
+display_name: Stripe
+type: payment
+icon: credit-card
+auth:
+  method: api_key
+  credentials:
+    - name: STRIPE_API_KEY
+      description: Stripe secret key (sk_...)
+      required: true
+
+actions:
+  - name: list_invoices
+    description: List recent invoices
+    method: GET
+    url: https://api.stripe.com/v1/invoices
+    params:
+      limit: { type: integer, default: 10 }
+      status: { type: string, enum: [draft, open, paid, void] }
+    trust_level: auto
+
+  - name: list_customers
+    description: List customers
+    method: GET
+    url: https://api.stripe.com/v1/customers
+    params:
+      limit: { type: integer, default: 10 }
+    trust_level: auto
+
+  - name: create_invoice
+    description: Create a new invoice
+    method: POST
+    url: https://api.stripe.com/v1/invoices
+    body:
+      customer: { type: string, required: true }
+      description: { type: string }
+    trust_level: confirm
+
+sync:
+  table: stripe_invoices
+  schedule: every_15m
+  mapping:
+    id: id
+    amount: amount_due
+    status: status
+    customer: customer
+    created: created

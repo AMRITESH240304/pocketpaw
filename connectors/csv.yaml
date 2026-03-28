@@ -1,0 +1,31 @@
+# CSV connector — import local CSV/Excel files into pocket.db.
+# Created: 2026-03-27
+
+name: csv
+display_name: CSV Import
+type: file
+icon: file-spreadsheet
+auth:
+  method: none
+  credentials: []
+
+actions:
+  - name: import_file
+    description: Import a CSV or Excel file into a pocket table
+    method: LOCAL
+    params:
+      file_path: { type: string, required: true, description: "Path to CSV/Excel file" }
+      table_name: { type: string, description: "Target table name (defaults to filename)" }
+      delimiter: { type: string, default: "," }
+      has_header: { type: boolean, default: true }
+    trust_level: auto
+
+  - name: list_tables
+    description: List imported tables in this pocket
+    method: LOCAL
+    trust_level: auto
+
+sync:
+  table: null
+  schedule: manual
+  mapping: {}
