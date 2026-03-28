@@ -122,7 +122,7 @@ class IntentionExecutor:
                     prepared_prompt.replace(
                         "{{session.title}}", session_meta.get("title", "this session")
                     )
-                    .replace("{{session.idle_hours}}", str(session_meta.get("idle_hours", "")))
+                    .replace("{{session.idle_hours}}", str(session_meta.get("idle_hours", "?")))
                     .replace("{{session.preview}}", session_meta.get("preview", ""))
                 )
 

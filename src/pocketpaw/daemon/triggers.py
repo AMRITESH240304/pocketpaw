@@ -228,6 +228,14 @@ class TriggerEngine:
         cooldown = timedelta(hours=threshold_hours * 2)
         cutoff = datetime.now(tz=UTC) - timedelta(hours=threshold_hours)
 
+        # Evict expired entries so _nudged_sessions doesn't grow unboundedly
+        now_evict = datetime.now(tz=UTC)
+        expired_keys = [
+            k for k, ts in self._nudged_sessions.items() if (now_evict - ts) >= cooldown
+        ]
+        for k in expired_keys:
+            del self._nudged_sessions[k]
+
         stale_sessions = self._find_stale_sessions(cutoff)
         if not stale_sessions:
             logger.debug(f"[stale trigger] No stale sessions found for '{intention['name']}'")
