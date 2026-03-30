@@ -102,6 +102,51 @@ class TestOAuthCompatProvider:
         assert storage.saved is not None
         assert storage.saved.access_token == "sbp_oauth_token"
 
+    async def test_accepts_201_refresh_response(self):
+        from mcp.shared.auth import OAuthToken
+
+        class _Storage:
+            def __init__(self):
+                self.saved = None
+
+            async def get_tokens(self):
+                return None
+
+            async def set_tokens(self, tokens):
+                self.saved = tokens
+
+            async def get_client_info(self):
+                return None
+
+            async def set_client_info(self, _client_info):
+                return None
+
+        storage = _Storage()
+        provider = MCPManager._make_oauth_auth(
+            MCPServerConfig(
+                name="supabase",
+                transport="http",
+                url="https://mcp.supabase.com/mcp",
+                oauth=True,
+            )
+        )
+        provider.context.storage = storage
+
+        response = httpx.Response(
+            status_code=201,
+            content=(
+                '{"access_token":"sbp_refreshed_token","refresh_token":"r2",'
+                '"expires_in":86400,"token_type":"Bearer"}'
+            ),
+        )
+
+        await provider._handle_refresh_response(response)
+
+        assert isinstance(provider.context.current_tokens, OAuthToken)
+        assert provider.context.current_tokens.access_token == "sbp_refreshed_token"
+        assert storage.saved is not None
+        assert storage.saved.access_token == "sbp_refreshed_token"
+
     async def test_set_and_get_client_info(self, storage):
         from mcp.shared.auth import OAuthClientInformationFull
 

@@ -277,6 +277,7 @@ class MCPManager:
 
         # Keep compatibility local to this integration without introducing a wrapper class.
         auth._handle_token_response = MethodType(_handle_token_response_compat, auth)
+        auth._handle_refresh_response = MethodType(_handle_token_response_compat, auth)
         return auth
 
     async def start_server(self, config: MCPServerConfig) -> bool:
