@@ -25,6 +25,7 @@ Changes:
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 import base64
 import io
 import json
@@ -117,8 +118,24 @@ TEMPLATES_DIR = FRONTEND_DIR / "templates"
 # Initialize Templates
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await startup_event()
+    yield
+    await shutdown_event()
+
+
+async def startup_event():
+    await _startup_event(_start_channel_adapter_fn=_start_channel_adapter)
+
+
+async def shutdown_event():
+    await _shutdown_event(_stop_channel_adapter_fn=_stop_channel_adapter)
+
 # Create FastAPI app
 app = FastAPI(
+    lifespan=lifespan,
     title="PocketPaw API",
     description="Self-hosted AI agent — REST API for external clients and the web dashboard.",
     version="1.0.0",
@@ -220,14 +237,7 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-async def startup_event():
-    await _startup_event(_start_channel_adapter_fn=_start_channel_adapter)
 
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    await _shutdown_event(_stop_channel_adapter_fn=_stop_channel_adapter)
 
 
 # ==================== MCP Server API ====================
