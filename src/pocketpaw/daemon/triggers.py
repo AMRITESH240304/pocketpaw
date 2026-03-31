@@ -272,10 +272,7 @@ class TriggerEngine:
         so the trigger degrades gracefully for other memory backends.
         """
         try:
-            store = get_memory_manager()._store
-            if not hasattr(store, "_load_session_index"):
-                return []
-            index: dict = store._load_session_index()
+            index: dict = get_memory_manager().list_sessions_with_metadata()
         except Exception as e:
             logger.warning(f"[stale trigger] Could not read session index: {e}")
             return []

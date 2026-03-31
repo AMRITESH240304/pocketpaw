@@ -665,6 +665,16 @@ class MemoryManager:
             return await self._store.remove_session_alias(source_key)
         return False
 
+    def list_sessions_with_metadata(self) -> dict[str, dict]:
+        """Return the full session index as {safe_key: metadata_dict}.
+
+        Delegates to the underlying store's session index loader when
+        available; returns an empty dict for backends that don't support it.
+        """
+        if not hasattr(self._store, "_load_session_index"):
+            return {}
+        return self._store._load_session_index()
+
     async def list_sessions_for_chat(self, session_key: str) -> list[dict]:
         """List all sessions associated with a chat, sorted by last_activity desc.
 
@@ -677,10 +687,9 @@ class MemoryManager:
         keys = await self._store.get_session_keys_for_chat(session_key)
 
         # Load session index metadata
-        if not hasattr(self._store, "_load_session_index"):
+        index = self.list_sessions_with_metadata()
+        if not index:
             return []
-
-        index = self._store._load_session_index()
 
         # Find which key is currently active (aliased target)
         active_key = session_key

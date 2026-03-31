@@ -116,15 +116,18 @@ class IntentionExecutor:
             raw_prompt = intention.get("prompt", "")
             prepared_prompt = self.context_hub.apply_template(raw_prompt, context)
 
-            # Inject stale-session variables when available
+            # Inject stale-session variables when available (single-pass to
+            # prevent chain-expansion if a session title contains a placeholder).
             if session_meta:
-                prepared_prompt = (
-                    prepared_prompt.replace(
-                        "{{session.title}}", session_meta.get("title", "this session")
-                    )
-                    .replace("{{session.idle_hours}}", str(session_meta.get("idle_hours", "?")))
-                    .replace("{{session.preview}}", session_meta.get("preview", ""))
-                )
+                import re
+
+                _session_vars = {
+                    "{{session.title}}": session_meta.get("title", "this session"),
+                    "{{session.idle_hours}}": str(session_meta.get("idle_hours", "?")),
+                    "{{session.preview}}": session_meta.get("preview", ""),
+                }
+                _pattern = re.compile("|".join(re.escape(k) for k in _session_vars))
+                prepared_prompt = _pattern.sub(lambda m: _session_vars[m.group(0)], prepared_prompt)
 
             logger.debug(f"Prepared prompt: {prepared_prompt[:100]}...")
 

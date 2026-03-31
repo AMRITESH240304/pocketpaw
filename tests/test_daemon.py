@@ -438,12 +438,9 @@ class TestStaleSessionTrigger:
             },
         }
 
-        class FakeStore:
-            def _load_session_index(self):
-                return fake_index
-
         class FakeManager:
-            _store = FakeStore()
+            def list_sessions_with_metadata(self):
+                return fake_index
 
         fired: list[dict] = []
 
@@ -494,12 +491,9 @@ class TestStaleSessionTrigger:
             },
         }
 
-        class FakeStore:
-            def _load_session_index(self):
-                return fake_index
-
         class FakeManager:
-            _store = FakeStore()
+            def list_sessions_with_metadata(self):
+                return fake_index
 
         fired: list[dict] = []
 
@@ -573,3 +567,44 @@ class TestStaleSessionTrigger:
             text = text_chunks[0]["content"]
             assert "Project X" in text
             assert "14.5" in text
+
+    @pytest.mark.asyncio
+    async def test_eviction_removes_expired_entries(self, engine):
+        """Expired entries in _nudged_sessions should be evicted on the next fire."""
+        from datetime import UTC, datetime, timedelta
+        from unittest.mock import patch
+
+        from pocketpaw.daemon.triggers import _DEFAULT_STALE_THRESHOLD_HOURS
+
+        threshold_hours = _DEFAULT_STALE_THRESHOLD_HOURS
+        cooldown = timedelta(hours=threshold_hours * 2)
+
+        # Pre-populate _nudged_sessions with an entry that has expired
+        expired_key = "chan_expired_user"
+        engine._nudged_sessions[expired_key] = datetime.now(tz=UTC) - cooldown - timedelta(hours=1)
+        # Also add a fresh entry that should survive eviction
+        fresh_key = "chan_fresh_nudge"
+        engine._nudged_sessions[fresh_key] = datetime.now(tz=UTC)
+
+        # Return an empty index so no new sessions fire — we only care about eviction
+        class FakeManager:
+            def list_sessions_with_metadata(self):
+                return {}
+
+        intention = {
+            "id": "stale-evict",
+            "name": "Eviction Test",
+            "enabled": True,
+            "trigger": {
+                "type": "stale",
+                "threshold_hours": threshold_hours,
+                "check_interval_minutes": 60,
+            },
+            "prompt": "nudge",
+        }
+
+        with patch("pocketpaw.daemon.triggers.get_memory_manager", return_value=FakeManager()):
+            await engine._fire_stale_trigger(intention)
+
+        assert expired_key not in engine._nudged_sessions, "Expired entry should have been evicted"
+        assert fresh_key in engine._nudged_sessions, "Fresh entry should survive eviction"
