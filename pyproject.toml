@@ -48,6 +48,7 @@ dependencies = [
     # Dashboard (default mode — must be in core so `pip install pocketpaw` just works)
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.31.1",
+    "starlette>=0.36.0",   # 0.36.0+ uses request-first TemplateResponse; 1.0.0 removes old signature
     "jinja2>=3.1.0",
     "qrcode[pil]>=7.4",
     "python-multipart>=0.0.22",
