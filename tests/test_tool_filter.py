@@ -10,15 +10,13 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from pocketpaw.tools.filter import ALWAYS_INCLUDE, _tokenize, filter_tools
 from pocketpaw.tools.protocol import BaseTool
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class _FakeTool(BaseTool):
     """Minimal BaseTool stub for testing."""
@@ -47,6 +45,7 @@ def _make_tools(n: int, prefix: str = "tool") -> list[_FakeTool]:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestFilterTools:
     """Unit tests for filter_tools()."""

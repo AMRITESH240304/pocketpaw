@@ -77,9 +77,7 @@ class PocketPawCognitiveEngine:
         """
         backend = self._backend_provider()
         if backend is None:
-            logger.debug(
-                "PocketPawCognitiveEngine.think(): no backend available, returning empty"
-            )
+            logger.debug("PocketPawCognitiveEngine.think(): no backend available, returning empty")
             return ""
 
         try:

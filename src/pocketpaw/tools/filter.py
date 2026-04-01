@@ -16,15 +16,17 @@ from collections.abc import Sequence
 from pocketpaw.tools.protocol import BaseTool
 
 # Tools that should always be available regardless of message content
-ALWAYS_INCLUDE = frozenset({
-    "web_search",
-    "remember",
-    "recall",
-    "forget",
-    "create_pocket",
-    "add_widget",
-    "remove_widget",
-})
+ALWAYS_INCLUDE = frozenset(
+    {
+        "web_search",
+        "remember",
+        "recall",
+        "forget",
+        "create_pocket",
+        "add_widget",
+        "remove_widget",
+    }
+)
 
 
 def _tokenize(text: str) -> set[str]:

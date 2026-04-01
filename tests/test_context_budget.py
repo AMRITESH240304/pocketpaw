@@ -5,12 +5,10 @@ Created: 2026-04-01 - Priority-based injection with per-block character caps.
 
 from __future__ import annotations
 
-import pytest
-
 from pocketpaw.bootstrap.context_builder import (
-    AgentContextBuilder,
     _DEFAULT_BUDGET_CHARS,
     _INJECTION_CAPS,
+    AgentContextBuilder,
     _Priority,
 )
 

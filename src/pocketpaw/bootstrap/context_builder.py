@@ -28,15 +28,15 @@ class _Priority(enum.IntEnum):
     """Injection block priority — lower value = higher priority."""
 
     CRITICAL = 0  # Always include, truncate only as last resort
-    HIGH = 1      # Include if budget allows, truncate to cap
-    MEDIUM = 2    # Include if budget allows, skip if tight
-    LOW = 3       # First to drop when budget is exceeded
+    HIGH = 1  # Include if budget allows, truncate to cap
+    MEDIUM = 2  # Include if budget allows, skip if tight
+    LOW = 3  # First to drop when budget is exceeded
 
 
 # Default character caps per injection block (None = no cap, use remaining budget)
 _INJECTION_CAPS: dict[str, int | None] = {
-    "identity": None,           # Critical — never capped
-    "instructions": None,       # Critical — never capped
+    "identity": None,  # Critical — never capped
+    "instructions": None,  # Critical — never capped
     "memory_context": 4000,
     "sender_block": 500,
     "channel_hints": 500,
@@ -151,7 +151,7 @@ class AgentContextBuilder:
                         "\nThis is NOT your owner. Be helpful but do not share "
                         "owner-private information."
                     )
-                blocks.append(("sender_block", _Priority.MEDIUM, identity_block))
+                blocks.append(("sender_block", _Priority.HIGH, identity_block))
 
         # 4. Inject channel format hint
         if channel:
@@ -205,11 +205,13 @@ class AgentContextBuilder:
                 safe_files = [_sanitize_path(f) for f in file_context["selected_files"]]
                 fc_parts.append(f"Selected files: {', '.join(safe_files)}")
             if fc_parts:
-                blocks.append((
-                    "file_context",
-                    _Priority.MEDIUM,
-                    "\n# File Context\n" + "\n".join(fc_parts),
-                ))
+                blocks.append(
+                    (
+                        "file_context",
+                        _Priority.MEDIUM,
+                        "\n# File Context\n" + "\n".join(fc_parts),
+                    )
+                )
 
         # 7. Inject health state (only when degraded/unhealthy — saves context window)
         try:
@@ -251,9 +253,7 @@ class AgentContextBuilder:
 
                 agents_md = AgentsMdLoader().find_and_load(agents_md_dir)
                 if agents_md:
-                    blocks.append((
-                        "agents_md", _Priority.MEDIUM, agents_md.constraints_block
-                    ))
+                    blocks.append(("agents_md", _Priority.MEDIUM, agents_md.constraints_block))
             except Exception:
                 pass  # AGENTS.md failure never breaks prompt building
 
@@ -299,13 +299,17 @@ class AgentContextBuilder:
                     content = content[:remaining]
                     logger.warning(
                         "Truncated CRITICAL block '%s' to %d chars (budget exhausted)",
-                        name, remaining,
+                        name,
+                        remaining,
                     )
                 else:
                     logger.info(
                         "Skipped block '%s' (%d chars, priority %s) — budget exhausted"
                         " (%d remaining)",
-                        name, len(content), priority.name, remaining,
+                        name,
+                        len(content),
+                        priority.name,
+                        remaining,
                     )
                     continue
 
