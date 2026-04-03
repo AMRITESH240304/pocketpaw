@@ -20,12 +20,16 @@ class Invite(Document):
     role: str = Field(default="member", pattern="^(admin|member|viewer)$")
     invited_by: str  # User ID
     token: Indexed(str, unique=True)  # type: ignore[valid-type]
+    group: str | None = None  # Group ID — if invite came from a group, auto-add on accept
     accepted: bool = False
     expires_at: datetime = Field(default_factory=_default_expiry)
 
     @property
     def expired(self) -> bool:
-        return datetime.now(UTC) > self.expires_at
+        exp = self.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=UTC)
+        return datetime.now(UTC) > exp
 
     class Settings:
         name = "invites"

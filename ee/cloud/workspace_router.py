@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import secrets
+import smtplib
 from datetime import UTC, datetime, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,6 +23,70 @@ from ee.cloud.models.workspace import Workspace, WorkspaceSettings
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Workspace"], dependencies=[Depends(require_license)])
+
+
+# ---------------------------------------------------------------------------
+# Email helper — sends invite via SMTP if configured, returns False otherwise
+# ---------------------------------------------------------------------------
+
+async def _send_invite_email(
+    to: str,
+    workspace_name: str,
+    invite_link: str,
+    inviter_id: str,
+) -> bool:
+    """Send invite email via SMTP. Returns True if sent, False if SMTP not configured."""
+    smtp_host = os.environ.get("SMTP_HOST", "")
+    if not smtp_host:
+        return False
+
+    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_user = os.environ.get("SMTP_USER", "")
+    smtp_pass = os.environ.get("SMTP_PASS", "")
+    smtp_from = os.environ.get("SMTP_FROM", smtp_user or f"noreply@{smtp_host}")
+    smtp_tls = os.environ.get("SMTP_TLS", "true").lower() in ("true", "1", "yes")
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"You're invited to {workspace_name} on PocketPaw"
+    msg["From"] = smtp_from
+    msg["To"] = to
+
+    text = (
+        f"You've been invited to join {workspace_name} on PocketPaw.\n\n"
+        f"Click here to accept: {invite_link}\n\n"
+        f"This link expires in 7 days."
+    )
+    html = f"""\
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 20px;">
+      <h2 style="margin: 0 0 8px; font-size: 20px; color: #111;">Join {workspace_name}</h2>
+      <p style="color: #555; font-size: 14px; line-height: 1.5; margin: 0 0 24px;">
+        You've been invited to join <strong>{workspace_name}</strong> on PocketPaw.
+      </p>
+      <a href="{invite_link}" style="display: inline-block; background: #0A84FF; color: white; padding: 10px 24px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 500;">
+        Accept Invite
+      </a>
+      <p style="color: #999; font-size: 12px; margin-top: 24px;">This link expires in 7 days.</p>
+    </div>
+    """
+
+    msg.attach(MIMEText(text, "plain"))
+    msg.attach(MIMEText(html, "html"))
+
+    try:
+        if smtp_tls:
+            server = smtplib.SMTP(smtp_host, smtp_port)
+            server.starttls()
+        else:
+            server = smtplib.SMTP(smtp_host, smtp_port)
+        if smtp_user and smtp_pass:
+            server.login(smtp_user, smtp_pass)
+        server.sendmail(smtp_from, to, msg.as_string())
+        server.quit()
+        logger.info("Invite email sent to %s", to)
+        return True
+    except Exception as exc:
+        logger.warning("SMTP send failed: %s", exc)
+        return False
 
 # ---------------------------------------------------------------------------
 # Request schemas
@@ -42,6 +110,7 @@ class UpdateMemberRoleRequest(BaseModel):
 class CreateInviteRequest(BaseModel):
     email: EmailStr
     role: str = Field(default="member", pattern="^(admin|member|viewer)$")
+    group: str | None = None  # Group ID — auto-add user to this group on accept
 
 
 class AcceptInviteRequest(BaseModel):
@@ -250,9 +319,35 @@ async def create_invite(
         role=body.role,
         invited_by=user_id,
         token=secrets.token_urlsafe(32),
+        group=body.group,
     )
     await invite.insert()
-    return invite
+
+    # Build invite link
+    app_url = os.environ.get("APP_URL", "http://localhost:1420")
+    invite_link = f"{app_url}/invite/{invite.token}"
+
+    # Try sending email if SMTP is configured
+    email_sent = False
+    try:
+        email_sent = await _send_invite_email(
+            to=body.email,
+            workspace_name=ws.name,
+            invite_link=invite_link,
+            inviter_id=user_id,
+        )
+    except Exception as exc:
+        logger.debug("Email send failed (SMTP not configured?): %s", exc)
+
+    return {
+        "_id": str(invite.id),
+        "email": invite.email,
+        "role": invite.role,
+        "token": invite.token,
+        "invite_link": invite_link,
+        "email_sent": email_sent,
+        "expires_at": invite.expires_at.isoformat(),
+    }
 
 
 @router.get("/invites")
@@ -293,11 +388,24 @@ async def validate_invite(token: str):
     if invite.expired:
         raise HTTPException(410, "Invite has expired")
     ws = await Workspace.get(PydanticObjectId(invite.workspace))
+
+    # Resolve group name if invite is group-scoped
+    group_name = None
+    if invite.group:
+        try:
+            from ee.cloud.models.group import Group
+            grp = await Group.get(PydanticObjectId(invite.group))
+            group_name = grp.name if grp else None
+        except Exception:
+            pass
+
     return {
         "valid": True,
         "email": invite.email,
         "role": invite.role,
         "workspace_name": ws.name if ws else "Unknown",
+        "group": invite.group,
+        "group_name": group_name,
     }
 
 
@@ -326,7 +434,7 @@ async def accept_invite(
         await invite.save()
         return {"ok": True, "workspace": invite.workspace, "already_member": True}
 
-    # Add membership
+    # Add workspace membership
     user.workspaces.append(
         WorkspaceMembership(workspace=invite.workspace, role=invite.role)
     )
@@ -334,7 +442,19 @@ async def accept_invite(
         user.active_workspace = invite.workspace
     await user.save()
 
+    # Auto-add to group if invite was group-scoped
+    group_id = invite.group
+    if group_id:
+        try:
+            from ee.cloud.models.group import Group
+            grp = await Group.get(PydanticObjectId(group_id))
+            if grp and user_id not in grp.members:
+                grp.members.append(user_id)
+                await grp.save()
+        except Exception as exc:
+            logger.warning("Failed to auto-add user to group %s: %s", group_id, exc)
+
     invite.accepted = True
     await invite.save()
 
-    return {"ok": True, "workspace": invite.workspace}
+    return {"ok": True, "workspace": invite.workspace, "group": group_id}

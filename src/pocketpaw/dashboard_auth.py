@@ -203,6 +203,13 @@ async def _auth_dispatch(request: Request) -> Response | None:
         "/api/v1/auth/bearer/login",
         "/api/v1/auth/me",
         "/api/v1/license",
+        # Enterprise cloud endpoints — JWT auth handled by fastapi-users, not this middleware
+        "/api/v1/groups",
+        "/api/v1/pockets",
+        "/api/v1/sessions",
+        "/api/v1/workspace",
+        "/api/v1/invites",
+        "/api/v1/agents",
     ]
 
     for path in exempt_paths:

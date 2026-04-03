@@ -65,6 +65,8 @@ _CLOUD_ROUTERS: list[tuple[str, str, str]] = [
     ("ee.cloud.workspace_router", "router", "Workspace"),
     ("ee.cloud.pockets_router", "router", "Cloud Pockets"),
     ("ee.cloud.sessions_router", "router", "Cloud Sessions"),
+    ("ee.cloud.groups_router", "router", "Cloud Groups"),
+    ("ee.cloud.agents_router", "router", "Cloud Agents"),
 ]
 
 

@@ -224,6 +224,7 @@ enterprise = [
     "beanie>=1.26.0",
     # Auth (user management + OAuth2 + JWT with Beanie backend)
     "fastapi-users[beanie,oauth]>=13.0.0",
+    "pwdlib[argon2]>=0.2.0",
     # Real-time (Socket.IO compat for enterprise multi-user)
     "python-socketio>=5.11.0",
     # Rate limiting
