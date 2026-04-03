@@ -1,14 +1,12 @@
-"""Regression test: dashboard index must return 200 on Starlette 1.0.0.
+"""Regression test: dashboard index must return 200 on Starlette 1.0.0."""
 
-Before fix: TemplateResponse("base.html", {"request": ..., ...}) raises
-TypeError on Starlette 1.0.0 because the dict becomes the name argument
-and Jinja2 can't hash (dict, globals) as a cache key.
 
-After fix: TemplateResponse(request, "base.html", {...}) works correctly.
-"""
+import importlib.metadata
 
-import pytest
 from fastapi.testclient import TestClient
+
+# Logged on failure to make version-related issues easier to diagnose
+STARLETTE_VERSION = importlib.metadata.version("starlette")
 
 
 def test_dashboard_index_returns_200():
@@ -18,10 +16,9 @@ def test_dashboard_index_returns_200():
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200, (
-        f"Dashboard returned {response.status_code}. "
-        "This likely means TemplateResponse is using the old Starlette <1.0 "
-        "signature. See: TemplateResponse(request, name, context) not "
-        "TemplateResponse(name, context)."
+        f"Dashboard returned {response.status_code} "
+        f"(starlette=={STARLETTE_VERSION}). "
+        "Check TemplateResponse signature in dashboard.py."
     )
 
 
