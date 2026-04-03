@@ -79,11 +79,26 @@ async def _get_group(group_id: PydanticObjectId) -> Group:
     return group
 
 
+async def _require_member(group: Group, user_id: str) -> None:
+    """Raise 403 if user is not a member of the group (public groups allow read but not write)."""
+    if user_id not in group.members:
+        raise HTTPException(403, "You are not a member of this group")
+
+
+async def _require_not_archived(group: Group) -> None:
+    """Raise 410 if group is archived."""
+    if group.archived:
+        raise HTTPException(410, "This group has been archived")
+
+
 async def _get_message(message_id: PydanticObjectId) -> Message:
     msg = await Message.get(message_id)
     if not msg or msg.deleted:
         raise HTTPException(404, "Message not found")
     return msg
+
+
+MAX_MESSAGE_LENGTH = 10_000  # characters
 
 
 async def _populate_group(group: Group) -> dict:
@@ -173,8 +188,13 @@ async def list_groups(
 
 
 @router.get("/groups/{group_id}")
-async def get_group(group_id: PydanticObjectId):
+async def get_group(
+    group_id: PydanticObjectId,
+    user_id: str = Depends(get_user_id),
+):
     group = await _get_group(group_id)
+    if group.type == "private" and user_id not in group.members:
+        raise HTTPException(403, "You don't have access to this private group")
     return await _populate_group(group)
 
 
@@ -260,6 +280,11 @@ async def remove_member(
     user_id: str = Depends(get_user_id),
 ):
     group = await _get_group(group_id)
+    if uid == group.owner:
+        raise HTTPException(403, "Cannot remove the group owner")
+    # Only owner or the user themselves can remove
+    if user_id != group.owner and user_id != uid:
+        raise HTTPException(403, "Only the group owner can remove members")
     group.members = [m for m in group.members if m != uid]
     await group.save()
     return await _populate_group(group)
@@ -324,9 +349,13 @@ async def remove_agent(
 @router.get("/groups/{group_id}/messages")
 async def list_messages(
     group_id: PydanticObjectId,
+    user_id: str = Depends(get_user_id),
     before: str | None = Query(None, description="Cursor: message _id to load before"),
     limit: int = Query(50, ge=1, le=200),
 ):
+    group = await _get_group(group_id)
+    if group.type == "private":
+        await _require_member(group, user_id)
     filt: dict[str, Any] = {"group": str(group_id), "deleted": False}
     if before:
         filt["_id"] = {"$lt": PydanticObjectId(before)}
@@ -344,13 +373,21 @@ async def send_message(
     body: SendMessageRequest,
     user_id: str = Depends(get_user_id),
 ):
-    # Verify group exists
-    await _get_group(group_id)
+    group = await _get_group(group_id)
+    await _require_not_archived(group)
+    await _require_member(group, user_id)
+
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(422, "Message content cannot be empty")
+    if len(content) > MAX_MESSAGE_LENGTH:
+        raise HTTPException(422, f"Message too long (max {MAX_MESSAGE_LENGTH} characters)")
+
     msg = Message(
         group=str(group_id),
         sender=user_id,
         sender_type="user",
-        content=body.content,
+        content=content,
         mentions=body.mentions,
         reply_to=body.reply_to,
         attachments=body.attachments,
@@ -366,10 +403,17 @@ async def edit_message(
     body: EditMessageRequest,
     user_id: str = Depends(get_user_id),
 ):
+    group = await _get_group(group_id)
+    await _require_not_archived(group)
     msg = await _get_message(message_id)
     if msg.sender != user_id:
         raise HTTPException(403, "Can only edit your own messages")
-    msg.content = body.content
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(422, "Message content cannot be empty")
+    if len(content) > MAX_MESSAGE_LENGTH:
+        raise HTTPException(422, f"Message too long (max {MAX_MESSAGE_LENGTH} characters)")
+    msg.content = content
     msg.edited = True
     await msg.save()
     return msg
@@ -381,8 +425,11 @@ async def delete_message(
     message_id: PydanticObjectId,
     user_id: str = Depends(get_user_id),
 ):
+    group = await _get_group(group_id)
+    await _require_not_archived(group)
     msg = await _get_message(message_id)
-    if msg.sender != user_id:
+    # Owner can delete any message, others can only delete their own
+    if msg.sender != user_id and group.owner != user_id:
         raise HTTPException(403, "Can only delete your own messages")
     msg.deleted = True
     await msg.save()

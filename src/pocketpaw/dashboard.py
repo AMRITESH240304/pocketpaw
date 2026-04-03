@@ -200,6 +200,16 @@ try:
 except Exception as _a2a_exc:
     logger.warning("A2A Protocol unavailable — skipping router mount: %s", _a2a_exc)
 
+# Mount Socket.IO for enterprise real-time group chat
+try:
+    from ee.cloud.socketio_server import socketio_app
+    app.mount("/ws/chat", socketio_app)
+    logger.info("Socket.IO mounted at /ws/chat")
+except ImportError:
+    logger.debug("Enterprise Socket.IO not available — skipping")
+except Exception as _sio_exc:
+    logger.warning("Socket.IO mount failed: %s", _sio_exc)
+
 # Mount channel management router (webhooks, extras, channel status/toggle)
 app.include_router(channels_router)
 

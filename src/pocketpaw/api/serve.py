@@ -68,6 +68,15 @@ def create_api_app():
     # --- Mount all /api/v1/ routers -------------------------------------
     mount_v1_routers(app)
 
+    # --- Mount Socket.IO for enterprise real-time group chat ----------------
+    try:
+        from ee.cloud.socketio_server import socketio_app
+        app.mount("/ws/chat", socketio_app)
+    except ImportError:
+        pass
+    except Exception:
+        logger.warning("Socket.IO mount failed", exc_info=True)
+
     # --- WebSocket handler helper ----------------------------------------
     async def _handle_ws(
         websocket: WebSocket,
