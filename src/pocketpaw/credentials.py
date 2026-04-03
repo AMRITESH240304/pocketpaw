@@ -2,6 +2,7 @@
 
 Changes:
   - 2026-02-06: Initial implementation — Fernet encryption with machine-derived PBKDF2 key.
+  - 2026-04-03: Hardened: Argon2id + AES-256-GCM, backup-safe migration, AEAD.
 
 Stores API keys and tokens in ~/.pocketpaw/secrets.enc instead of plaintext config.json.
 Encryption key derived from machine identity (hostname + MAC + username) so the encrypted
@@ -13,6 +14,7 @@ import json
 import logging
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from functools import lru_cache
@@ -78,6 +80,10 @@ def _ensure_dir_permissions(path: Path) -> None:
 VERSION_2_HEADER = b"PAW\x02"
 
 
+class CredentialMigrationError(Exception):
+    """Raised when v1 → v2 migration fails and cannot be recovered."""
+
+
 class CredentialStore:
     """Encrypted credential store (2026 Edition).
 
@@ -128,8 +134,8 @@ class CredentialStore:
 
         # 2. Only attempt ioreg on macOS
         if sys.platform != "darwin":
-            # Fallback for Linux or Windows: use platform.node()
-            return f"FALLBACK-{platform.node()}"
+            # Fallback for Linux or Windows
+            return "NO_HARDWARE_UUID"
 
         try:
             # Command to extract the Hardware UUID on macOS (safer version without shell=True)
@@ -138,16 +144,34 @@ class CredentialStore:
             )
             for line in output.splitlines():
                 if "IOPlatformUUID" in line:
-                    # Line looks like: "IOPlatformUUID" = "6D7AA782-3B61-5AF8-B622-E5586025A2DC"
+                    # Line looks like: "IOPlatformUUID" = "6D7AA782-..."
                     parts = line.split("=")
                     if len(parts) > 1:
                         return parts[1].strip().strip('"')
-            return f"DEFAULT-{platform.node()}"
-        except (subprocess.SubprocessError, OSError, Exception):
-            return f"DEFAULT-{platform.node()}"  # Last resort fallback
+            return "NO_HARDWARE_UUID"
+        except Exception:
+            return "NO_HARDWARE_UUID"  # Last resort fallback
+
+    # -----------------------------------------------------------------
+    # Identity helpers
+    # -----------------------------------------------------------------
+
+    def _get_v1_machine_identity(self) -> bytes:
+        """Build the v1 machine-bound identity string (machine_id|login_name).
+
+        This MUST exactly match the original _get_machine_identity()
+        from before the v2 upgrade so that legacy Fernet files can be
+        decrypted correctly during migration.
+        """
+        parts = [self._get_machine_id()]
+        try:
+            parts.append(os.getlogin())
+        except OSError:
+            parts.append(os.environ.get("USER", os.environ.get("USERNAME", "pocketpaw")))
+        return "|".join(parts).encode("utf-8")
 
     def _get_machine_identity(self) -> bytes:
-        """Build a machine-bound identity string."""
+        """Build a v2 machine-bound identity string (machine_id|hw_uuid|login_name)."""
         parts = [
             self._get_machine_id(),
             self._get_macos_hardware_uuid(),
@@ -174,16 +198,14 @@ class CredentialStore:
         _ensure_permissions(self._salt_path)
         return salt
 
+    # -----------------------------------------------------------------
+    # Key derivation
+    # -----------------------------------------------------------------
+
     def _derive_key(self) -> bytes:
-        """Derive a legacy Fernet key from machine identity + salt via PBKDF2."""
+        """Derive a legacy Fernet key from v1 machine identity + salt via PBKDF2."""
         salt = self._get_or_create_salt()
-        # Note: v1 identity doesn't include macOS hardware UUID (handled in _load)
-        parts = [self._get_machine_id()]
-        try:
-            parts.append(os.getlogin())
-        except OSError:
-            parts.append(os.environ.get("USER", os.environ.get("USERNAME", "pocketpaw")))
-        identity = "|".join(parts).encode("utf-8")
+        identity = self._get_v1_machine_identity()
 
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
@@ -205,6 +227,10 @@ class CredentialStore:
         )
         return kdf.derive(self._get_machine_identity())
 
+    # -----------------------------------------------------------------
+    # Load / Save
+    # -----------------------------------------------------------------
+
     def _load(self) -> dict[str, str]:
         """Decrypt and load secrets from disk with auto-migration support."""
         if self._cache is not None:
@@ -214,50 +240,87 @@ class CredentialStore:
             self._cache = {}
             return self._cache
 
-        try:
-            raw_data = self._secrets_path.read_bytes()
-            if not raw_data:
-                self._cache = {}
-                return self._cache
+        raw_data = self._secrets_path.read_bytes()
+        if not raw_data:
+            self._cache = {}
+            return self._cache
 
-            decrypted_json: str | None = None
-
-            # Check for version 2 header
-            if raw_data.startswith(VERSION_2_HEADER):
-                # Format: [HEADER][NONCE][CIPHERTEXT]
+        # ---- v2: AES-256-GCM + Argon2id ----
+        if raw_data.startswith(VERSION_2_HEADER):
+            try:
                 nonce = raw_data[len(VERSION_2_HEADER) : len(VERSION_2_HEADER) + 12]
                 ciphertext = raw_data[len(VERSION_2_HEADER) + 12 :]
                 aesgcm = AESGCM(self._derive_key_v2(self._get_or_create_salt()))
-                decrypted = aesgcm.decrypt(nonce, ciphertext, None)
-                decrypted_json = decrypted.decode("utf-8")
+                decrypted = aesgcm.decrypt(nonce, ciphertext, VERSION_2_HEADER)
+                self._cache = json.loads(decrypted.decode("utf-8"))
+            except Exception as exc:
+                logger.warning(
+                    "Failed to decrypt v2 secrets.enc (machine changed?): %s. "
+                    "Starting with empty credential store.",
+                    exc,
+                )
+                self._cache = {}
+            return self._cache
 
-            # Fallback to legacy Fernet (v1)
-            elif raw_data.startswith(b"gAAAA"):
+        # ---- v1: Legacy Fernet + PBKDF2 (migration path) ----
+        if raw_data.startswith(b"gAAAA"):
+            backup_path = self._secrets_path.with_suffix(".enc.v1.bak")
+            try:
+                # 1. Create backup BEFORE any mutation
+                shutil.copy2(self._secrets_path, backup_path)
+                _ensure_permissions(backup_path)
+
+                # 2. Decrypt with the original v1 key derivation
                 fernet = Fernet(self._derive_key())
                 decrypted = fernet.decrypt(raw_data)
-                decrypted_json = decrypted.decode("utf-8")
+                data = json.loads(decrypted.decode("utf-8"))
 
-                # Auto-migrate to v2 format
-                if decrypted_json:
-                    logger.info("Auto-migrating secrets.enc to v2 security format.")
-                    data = json.loads(decrypted_json)
-                    self._save(data)
-                    self._cache = data
-                    return data
+                # 3. Re-encrypt as v2
+                logger.info("Auto-migrating secrets.enc to v2 security format.")
+                self._save(data)
 
-            if decrypted_json:
-                self._cache = json.loads(decrypted_json)
-            else:
-                raise ValueError("Unknown or corrupted secrets format.")
+                # 4. Test-decrypt the newly written v2 file to be sure
+                v2_raw = self._secrets_path.read_bytes()
+                v2_nonce = v2_raw[len(VERSION_2_HEADER) : len(VERSION_2_HEADER) + 12]
+                v2_ct = v2_raw[len(VERSION_2_HEADER) + 12 :]
+                aesgcm = AESGCM(self._derive_key_v2(self._get_or_create_salt()))
+                aesgcm.decrypt(v2_nonce, v2_ct, VERSION_2_HEADER)
 
-        except (InvalidToken, json.JSONDecodeError, Exception) as exc:
-            logger.warning(
-                "Failed to decrypt secrets.enc (machine changed? format error?): %s. "
-                "Starting with empty credential store.",
-                exc,
-            )
-            self._cache = {}
+                self._cache = data
+                return self._cache
 
+            except InvalidToken:
+                # v1 decryption failed — restore backup, raise immediately
+                if backup_path.exists():
+                    shutil.copy2(backup_path, self._secrets_path)
+                    logger.error(
+                        "v1 secret decryption failed (wrong key?). "
+                        "Backup restored to secrets.enc."
+                    )
+                raise CredentialMigrationError(
+                    "Failed to decrypt v1 secrets.enc — key derivation mismatch. "
+                    "The backup has been restored."
+                ) from None
+
+            except Exception as exc:
+                # Migration or v2 test-decrypt failed — restore backup
+                if backup_path.exists():
+                    shutil.copy2(backup_path, self._secrets_path)
+                    logger.error(
+                        "v1→v2 migration failed (%s). Backup restored to secrets.enc.",
+                        exc,
+                    )
+                raise CredentialMigrationError(
+                    f"v1→v2 migration failed: {exc}. The backup has been restored."
+                ) from exc
+
+        # ---- Unknown format ----
+        logger.warning(
+            "secrets.enc has unrecognised format (first 4 bytes: %r). "
+            "Starting with empty credential store.",
+            raw_data[:4],
+        )
+        self._cache = {}
         return self._cache
 
     def _save(self, data: dict[str, str]) -> None:
@@ -270,7 +333,7 @@ class CredentialStore:
         aesgcm = AESGCM(self._derive_key_v2(salt))
 
         plaintext = json.dumps(data).encode("utf-8")
-        ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+        ciphertext = aesgcm.encrypt(nonce, plaintext, VERSION_2_HEADER)
 
         # Build v2 payload: [HEADER][NONCE][CIPHERTEXT]
         payload = VERSION_2_HEADER + nonce + ciphertext
@@ -278,6 +341,10 @@ class CredentialStore:
         self._secrets_path.write_bytes(payload)
         _ensure_permissions(self._secrets_path)
         self._cache = data
+
+    # -----------------------------------------------------------------
+    # Public API
+    # -----------------------------------------------------------------
 
     def get(self, name: str) -> str | None:
         """Get a secret by name. Returns None if not found."""

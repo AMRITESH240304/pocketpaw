@@ -133,7 +133,7 @@ async def _init_async(name: str | None, provider: str | None, scan: bool) -> Non
             persona=f"I am {config.soul_name}, the resident AI for this project.",
         )
         soul_path.parent.mkdir(parents=True, exist_ok=True)
-        await soul.save_local(soul_path)
+        await soul.save(soul_path)
         _print(f"  Soul saved to {soul_path}", style="green")
 
     # Write paw.yaml config
@@ -154,7 +154,7 @@ async def _init_async(name: str | None, provider: str | None, scan: bool) -> Non
         from pocketpaw.paw.scan import heuristic_scan
 
         await heuristic_scan(project_root, soul)
-        await soul.save_local(soul_path)
+        await soul.save(soul_path)
         _print("  Scan complete. Soul updated with project knowledge.", style="green")
 
     _print("\n  paw is ready. Try: paw ask 'what is this project?'\n", style="bold green")
@@ -238,7 +238,7 @@ async def _ask_async(question: str) -> None:
         full_response = "".join(response_parts)
         if full_response:
             await agent.bridge.observe(question, full_response)
-            await agent.soul.save_local(agent.config.soul_path or agent.config.default_soul_path)
+            await agent.soul.save(agent.config.soul_path or agent.config.default_soul_path)
     except Exception as e:
         _print(f"Agent error: {e}", style="red")
         _print("Falling back to memory recall only.", style="dim")
@@ -335,7 +335,7 @@ async def _chat_async() -> None:
 
     # Save soul state on exit
     try:
-        await agent.soul.save_local(soul_path)
+        await agent.soul.save(soul_path)
         _print("Soul state saved.", style="dim")
     except Exception:
         pass
