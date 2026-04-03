@@ -168,8 +168,14 @@ def main() -> None:
         print(f"Available: {', '.join(sorted(_TOOLS))}", file=sys.stderr)
         sys.exit(1)
 
-    # Parse JSON args
-    args_str = sys.argv[2] if len(sys.argv) > 2 else "{}"
+    # Parse JSON args — prefer stdin to avoid bash $-expansion issues with CLI args
+    args_str = ""
+    if len(sys.argv) > 2 and sys.argv[2] != "-":
+        args_str = sys.argv[2]
+    elif not sys.stdin.isatty():
+        args_str = sys.stdin.read().strip()
+    if not args_str:
+        args_str = "{}"
     try:
         args = json.loads(args_str)
     except json.JSONDecodeError as e:

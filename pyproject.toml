@@ -218,6 +218,28 @@ all-tools = [
 all-backends = [
     "pocketpaw[openai-agents,google-adk,copilot-sdk,deep-agents,litellm]",
 ]
+enterprise = [
+    # MongoDB (async ODM)
+    "motor>=3.3.0",
+    "beanie>=1.26.0",
+    # Auth (user management + OAuth2 + JWT with Beanie backend)
+    "fastapi-users[beanie,oauth]>=13.0.0",
+    # Real-time (Socket.IO compat for enterprise multi-user)
+    "python-socketio>=5.11.0",
+    # Rate limiting
+    "slowapi>=0.1.9",
+    # File storage (S3 + GCS)
+    "boto3>=1.34.0",
+    "google-cloud-storage>=2.14.0",
+    # Voice/video tokens
+    "livekit-api>=0.6.0",
+    # Redis (session cache, pub/sub)
+    "redis[hiredis]>=5.0.0",
+    # OAuth integrations (Google APIs)
+    "google-api-python-client>=2.100.0",
+    "google-auth>=2.25.0",
+    "google-auth-oauthlib>=1.2.0",
+]
 all = [
     # browser
     "playwright>=1.50.0",

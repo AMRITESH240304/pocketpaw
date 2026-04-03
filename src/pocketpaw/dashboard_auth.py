@@ -198,6 +198,11 @@ async def _auth_dispatch(request: Request) -> Response | None:
         "/api/v1/mcp/oauth/callback",
         "/api/v1/oauth/authorize",
         "/api/v1/oauth/token",
+        "/api/v1/auth/login",
+        "/api/v1/auth/register",
+        "/api/v1/auth/bearer/login",
+        "/api/v1/auth/me",
+        "/api/v1/license",
     ]
 
     for path in exempt_paths:

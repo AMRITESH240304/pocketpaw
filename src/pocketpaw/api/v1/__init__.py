@@ -57,6 +57,16 @@ _EE_ROUTERS: list[tuple[str, str, str]] = [
     ("pocketpaw.ee.automations.router", "router", "Automations"),
 ]
 
+# Cloud routers mount at /api/cloud/ to avoid collisions with core /api/v1/ routes.
+# When paw-cloud NestJS is fully retired, these move to /api/v1/.
+_CLOUD_ROUTERS: list[tuple[str, str, str]] = [
+    ("ee.cloud.auth", "router", "Cloud Auth"),
+    ("ee.cloud.license_router", "router", "License"),
+    ("ee.cloud.workspace_router", "router", "Workspace"),
+    ("ee.cloud.pockets_router", "router", "Cloud Pockets"),
+    ("ee.cloud.sessions_router", "router", "Cloud Sessions"),
+]
+
 
 def mount_v1_routers(app: FastAPI) -> None:
     """Mount all v1 domain routers on *app*.
@@ -69,6 +79,19 @@ def mount_v1_routers(app: FastAPI) -> None:
     from fastapi import APIRouter
 
     _CRITICAL_ROUTERS = {"Auth", "Chat", "Health", "Sessions"}
+
+    # Cloud routers mount FIRST so they take priority over core routes
+    # (e.g., cloud /sessions overrides core /sessions)
+    for module_path, attr_name, tag in _CLOUD_ROUTERS:
+        try:
+            mod = importlib.import_module(module_path)
+            router: APIRouter = getattr(mod, attr_name)
+            app.include_router(router, prefix="/api/v1")
+            logger.debug("Mounted cloud router: %s (%s)", module_path, tag)
+        except ImportError:
+            logger.debug("Skipping cloud router %s (ee/ not available)", module_path)
+        except Exception:
+            logger.warning("Failed to mount cloud router %s", module_path, exc_info=True)
 
     for module_path, attr_name, tag in _V1_ROUTERS:
         try:

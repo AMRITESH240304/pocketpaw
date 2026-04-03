@@ -1,0 +1,32 @@
+"""Notification document."""
+
+from __future__ import annotations
+
+from beanie import Indexed
+
+from ee.cloud.models.base import TimestampedDocument
+from pydantic import BaseModel, Field
+
+
+class NotificationSource(BaseModel):
+    type: str
+    id: str
+    pocket_id: str | None = None
+
+
+class Notification(TimestampedDocument):
+    """In-app notification for a user."""
+
+    workspace: Indexed(str)  # type: ignore[valid-type]
+    recipient: Indexed(str)  # type: ignore[valid-type]
+    type: str  # mention, comment, reply, invite, agent_complete, pocket_shared
+    title: str
+    body: str = ""
+    source: NotificationSource | None = None
+    read: bool = False
+
+    class Settings:
+        name = "notifications"
+        indexes = [
+            [("recipient", 1), ("read", 1), ("created_at", -1)],
+        ]
