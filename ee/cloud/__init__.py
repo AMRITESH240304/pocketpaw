@@ -76,6 +76,20 @@ def mount_cloud(app: FastAPI) -> None:
     async def license_info():
         return get_license_info()
 
-    # Register cross-domain event handlers
+    # Register cross-domain event handlers + agent bridge
     from ee.cloud.shared.event_handlers import register_event_handlers
     register_event_handlers()
+
+    from ee.cloud.shared.agent_bridge import register_agent_bridge
+    register_agent_bridge()
+
+    # Start/stop agent pool with app lifecycle
+    @app.on_event("startup")
+    async def _start_agent_pool():
+        from pocketpaw.agents.pool import get_agent_pool
+        await get_agent_pool().start()
+
+    @app.on_event("shutdown")
+    async def _stop_agent_pool():
+        from pocketpaw.agents.pool import get_agent_pool
+        await get_agent_pool().stop()

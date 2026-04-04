@@ -414,7 +414,10 @@ class MessageService:
                 "group_id": group_id,
                 "message_id": str(msg.id),
                 "sender_id": user_id,
+                "sender_type": "user",
                 "content": body.content,
+                "mentions": body.mentions,
+                "workspace_id": group.workspace,
             },
         )
 
