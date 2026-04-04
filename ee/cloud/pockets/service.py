@@ -90,6 +90,7 @@ class PocketService:
             color=body.color,
             owner=user_id,
             visibility=body.visibility,
+            rippleSpec=normalize_ripple_spec(body.ripple_spec) if body.ripple_spec else None,
         )
         await pocket.insert()
 

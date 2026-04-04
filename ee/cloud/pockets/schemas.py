@@ -15,7 +15,10 @@ class CreatePocketRequest(BaseModel):
     icon: str = ""
     color: str = ""
     visibility: str = Field(default="private", pattern="^(private|workspace|public)$")
-    session_id: str | None = None  # Auto-link existing session to this pocket
+    session_id: str | None = Field(default=None, alias="sessionId")
+    ripple_spec: dict | None = Field(default=None, alias="rippleSpec")
+
+    model_config = {"populate_by_name": True}
 
 
 class UpdatePocketRequest(BaseModel):
@@ -25,7 +28,9 @@ class UpdatePocketRequest(BaseModel):
     icon: str | None = None
     color: str | None = None
     visibility: str | None = None
-    ripple_spec: dict | None = None  # Updated UI spec
+    ripple_spec: dict | None = Field(default=None, alias="rippleSpec")
+
+    model_config = {"populate_by_name": True}
 
 
 class AddWidgetRequest(BaseModel):
