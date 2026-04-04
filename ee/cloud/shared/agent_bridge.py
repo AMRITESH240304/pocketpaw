@@ -37,18 +37,25 @@ async def on_message_for_agents(data: dict) -> None:
     if sender_type == "agent":
         return
 
+    logger.info("Agent bridge: message in group %s from %s: %s", group_id, sender_id, content[:50])
+
     from beanie import PydanticObjectId
     from ee.cloud.models.group import Group
 
     try:
         group = await Group.get(PydanticObjectId(group_id))
     except Exception:
+        logger.error("Agent bridge: failed to load group %s", group_id, exc_info=True)
         return
     if not group or not group.agents:
+        logger.info("Agent bridge: group %s has no agents", group_id)
         return
+
+    logger.info("Agent bridge: group has %d agents: %s", len(group.agents), [(a.agent, a.respond_mode) for a in group.agents])
 
     for group_agent in group.agents:
         should = await _should_agent_respond(group_agent, content, mentions)
+        logger.info("Agent bridge: agent %s respond_mode=%s should_respond=%s", group_agent.agent, group_agent.respond_mode, should)
         if should:
             asyncio.create_task(
                 _run_agent_response(
@@ -142,10 +149,12 @@ async def _run_agent_response(
     pool = get_agent_pool()
     session_key = f"cloud:{group_id}:{agent_id}"
 
+    logger.info("Agent bridge: running response for agent %s in group %s", agent_id, group_id)
+
     try:
         instance = await pool.get(agent_id)
     except Exception:
-        logger.error("Failed to get agent instance %s", agent_id)
+        logger.error("Failed to get agent instance %s", agent_id, exc_info=True)
         return
 
     # Fetch recent conversation history from cloud Messages
