@@ -65,7 +65,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # --- Feature extras ---
-vector = ["chromadb"]
+vector = ["chromadb", "bm25s"]
 databases = [
     "sqlalchemy[asyncio]>=2.0.0",
     "asyncpg>=0.29.0",       # PostgreSQL

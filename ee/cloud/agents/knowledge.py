@@ -214,9 +214,24 @@ class KnowledgeService:
 
     @staticmethod
     async def search(agent_id: str, query: str, limit: int = 5) -> list[str]:
-        """Search an agent's knowledge base."""
+        """Hybrid search: BM25 (keyword) + vector (semantic), results merged by RRF.
+
+        Falls back to vector-only if bm25s is not installed.
+        """
         store = KnowledgeService._get_store(agent_id)
-        return await store.search(query, limit=limit)
+
+        # Vector search
+        vector_results = await store.search(query, limit=limit * 2)
+
+        # BM25 keyword search
+        bm25_results = await _bm25_search(agent_id, store, query, limit=limit * 2)
+
+        if not bm25_results:
+            # BM25 unavailable or no results — return vector only
+            return vector_results[:limit]
+
+        # Reciprocal Rank Fusion (RRF) — merge both ranked lists
+        return _rrf_merge(vector_results, bm25_results, limit=limit)
 
     @staticmethod
     async def clear(agent_id: str) -> dict:
@@ -233,3 +248,59 @@ class KnowledgeService:
         except Exception as exc:
             logger.warning("Failed to clear knowledge for agent %s: %s", agent_id, exc)
             return {"ok": False, "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# BM25 keyword search + RRF merge
+# ---------------------------------------------------------------------------
+
+
+async def _bm25_search(agent_id: str, store: Any, query: str, limit: int = 10) -> list[str]:
+    """Run BM25 keyword search over all documents in the agent's collection."""
+    try:
+        import bm25s
+    except ImportError:
+        return []  # BM25 not installed — graceful fallback
+
+    import asyncio
+
+    try:
+        # Fetch all documents from the Chroma collection
+        all_docs = await asyncio.to_thread(store.collection.get)
+        documents = all_docs.get("documents", [])
+        if not documents:
+            return []
+
+        # Build BM25 index
+        tokenized = bm25s.tokenize(documents)
+        retriever = bm25s.BM25()
+        retriever.index(tokenized)
+
+        # Search
+        query_tokens = bm25s.tokenize([query])
+        results, scores = retriever.retrieve(query_tokens, corpus=documents, k=min(limit, len(documents)))
+
+        # Return results with score > 0
+        return [doc for doc, score in zip(results[0], scores[0]) if score > 0]
+    except Exception:
+        logger.debug("BM25 search failed for agent %s", agent_id, exc_info=True)
+        return []
+
+
+def _rrf_merge(vector_results: list[str], bm25_results: list[str], limit: int = 5, k: int = 60) -> list[str]:
+    """Reciprocal Rank Fusion — merge two ranked lists into one.
+
+    RRF score = sum(1 / (k + rank)) across all lists where the doc appears.
+    k=60 is the standard constant from the original paper.
+    """
+    scores: dict[str, float] = {}
+
+    for rank, doc in enumerate(vector_results):
+        scores[doc] = scores.get(doc, 0) + 1.0 / (k + rank + 1)
+
+    for rank, doc in enumerate(bm25_results):
+        scores[doc] = scores.get(doc, 0) + 1.0 / (k + rank + 1)
+
+    # Sort by fused score descending
+    sorted_docs = sorted(scores.keys(), key=lambda d: scores[d], reverse=True)
+    return sorted_docs[:limit]
