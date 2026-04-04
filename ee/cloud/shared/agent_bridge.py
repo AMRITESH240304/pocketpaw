@@ -165,6 +165,25 @@ async def _run_agent_response(
         role = "assistant" if m.sender_type == "agent" else "user"
         history.append({"role": role, "content": m.content})
 
+    # Inject knowledge context from agent's knowledge engine
+    knowledge_context = ""
+    try:
+        from ee.cloud.agents.knowledge import KnowledgeService
+        knowledge_context = await KnowledgeService.search_context(agent_id, user_message)
+    except Exception:
+        pass  # Knowledge unavailable — non-fatal
+
+    if knowledge_context:
+        # Prepend knowledge to history as a system-like context block
+        history.insert(0, {
+            "role": "user",
+            "content": f"[KNOWLEDGE CONTEXT — use this information to answer]\n\n{knowledge_context}",
+        })
+        history.insert(1, {
+            "role": "assistant",
+            "content": "I've noted the knowledge context and will use it in my response.",
+        })
+
     # Notify: agent starts generating
     temp_msg_id = f"agent-stream-{agent_id}-{int(datetime.now(UTC).timestamp() * 1000)}"
     await ws_manager.broadcast_to_group(
