@@ -257,7 +257,6 @@ class AgentContextBuilder:
             except Exception:
                 pass  # AGENTS.md failure never breaks prompt building
 
-        parts = [p for p in parts if isinstance(p, str) and p]
         # 10. Inject GWS CLI guidance when google-workspace MCP server is active
         try:
             gws_block = self._load_gws_instructions()
