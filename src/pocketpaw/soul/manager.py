@@ -18,12 +18,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from pocketpaw.agents.backend import AgentBackend
     from pocketpaw.config import Settings
     from pocketpaw.paw.soul_bridge import SoulBootstrapProvider, SoulBridge
     from pocketpaw.tools.protocol import BaseTool

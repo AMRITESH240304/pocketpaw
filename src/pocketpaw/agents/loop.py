@@ -941,8 +941,9 @@ class AgentLoop:
                 # v0.2.8+: Include bond state if available
                 if hasattr(soul, "bond") and soul.bond:
                     try:
+                        bond = soul.bond
                         event_data["bond"] = (
-                            soul.bond.model_dump() if hasattr(soul.bond, "model_dump") else str(soul.bond)
+                            bond.model_dump() if hasattr(bond, "model_dump") else str(bond)
                         )
                     except Exception:
                         pass
@@ -986,6 +987,7 @@ class AgentLoop:
         """Build a CognitiveEngine for soul, backed by the active agent backend."""
         try:
             from pocketpaw.soul.cognitive import PocketPawCognitiveEngine
+
             return PocketPawCognitiveEngine(
                 backend_provider=lambda: (
                     self._get_router()._backend if self._router is not None else None
