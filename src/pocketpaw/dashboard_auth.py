@@ -182,8 +182,6 @@ async def _auth_dispatch(request: Request) -> Response | None:
         "/ws",  # WebSocket handles its own auth in dashboard_ws.py
         "/v1/ws",  # v1 WebSocket (short path) — same handler, same auth
         "/api/v1/ws",  # v1 WebSocket — same handler, same auth
-        "/api/qr",
-        "/api/v1/qr",
         "/api/auth/login",
         "/api/v1/auth/login",
         "/api/v1/docs",
@@ -206,7 +204,7 @@ async def _auth_dispatch(request: Request) -> Response | None:
 
     # Rate limiting — pick tier based on path
     client_ip = request.client.host if request.client else "unknown"
-    is_auth_path = request.url.path in ("/api/auth/session", "/api/qr")
+    is_auth_path = request.url.path == "/api/auth/session"
     limiter = auth_limiter if is_auth_path else api_limiter
     rl_info = limiter.check(client_ip)
     if not rl_info.allowed:
@@ -438,7 +436,11 @@ async def cookie_logout(request: Request):
 
 @auth_router.get("/api/qr")
 async def get_qr_code(request: Request):
-    """Generate QR login code."""
+    """Generate QR login code.
+
+    Requires authentication — the caller must already have a valid session.
+    Generates a short-lived (60 s) one-time pairing token embedded in the QR URL.
+    """
     import qrcode
 
     # Logic: If tunnel is active, use tunnel URL. Else local IP.
@@ -448,9 +450,9 @@ async def get_qr_code(request: Request):
     tunnel = get_tunnel_manager()
     status = tunnel.get_status()
 
-    # Use a short-lived session token instead of the master token
-    # to limit exposure in browser history, screenshots, and logs.
-    qr_token = create_session_token(get_access_token(), ttl_hours=1)
+    # Short-lived pairing token (60 seconds) — scoped to the QR pairing flow
+    # so a leaked QR code cannot grant long-lived access.
+    qr_token = create_session_token(get_access_token(), ttl_hours=0, ttl_seconds=60)
 
     if status.get("active") and status.get("url"):
         login_url = f"{status['url']}/?token={qr_token}"
@@ -458,6 +460,8 @@ async def get_qr_code(request: Request):
         # Fallback to current request host (localhost or network IP)
         protocol = "https" if "trycloudflare" in str(host) else "http"
         login_url = f"{protocol}://{host}/?token={qr_token}"
+
+    _audit_auth_event("qr_code_generated", request, status="success")
 
     img = qrcode.make(login_url)
     buf = io.BytesIO()
