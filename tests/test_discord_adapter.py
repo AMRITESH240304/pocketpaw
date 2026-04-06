@@ -80,6 +80,41 @@ async def test_start_no_token():
         await a._on_start()
 
 
+async def test_on_start_does_not_pollute_os_environ():
+    """Token must not be written into os.environ (OWASP A02 — process-wide secret exposure)."""
+    import os
+
+    secret = "super-secret-discord-token"
+    a = DiscliAdapter(token=secret)
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/discli"),
+        patch.object(a, "_write_slash_config", new=AsyncMock(return_value=None)),
+        patch("asyncio.create_subprocess_exec", new=AsyncMock()) as mock_exec,
+        patch.object(a, "_read_stdout", new=AsyncMock()),
+        patch.object(a, "_drain_stderr", new=AsyncMock()),
+        patch.object(a, "_eviction_loop", new=AsyncMock()),
+    ):
+        # Fake bot_id so _on_start does not time-out waiting for a ready event
+        async def _set_bot_id(*_args, **_kwargs):
+            a._bot_id = "123456789"
+            return MagicMock(
+                stdin=MagicMock(),
+                stdout=MagicMock(),
+                stderr=MagicMock(),
+            )
+
+        mock_exec.side_effect = _set_bot_id
+
+        with patch.object(a, "_register_discord_mcp"):
+            os.environ.pop("DISCORD_BOT_TOKEN", None)
+            await a._on_start()
+
+    assert os.environ.get("DISCORD_BOT_TOKEN") != secret, (
+        "Bot token must not be written into os.environ"
+    )
+
+
 # ── Auth checks ─────────────────────────────────────────────────────
 
 
