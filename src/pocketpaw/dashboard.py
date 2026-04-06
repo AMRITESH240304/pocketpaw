@@ -1310,7 +1310,7 @@ async def get_long_term_memory(limit: int = 50):
     # So we use filtered search or we should expose it.
     # For now, let's use _store hack or add method to manager?
     # I'll rely on a new Manager method or _store for now to keep it simple.
-    items = await manager._store.get_by_type(MemoryType.LONG_TERM, limit=limit)
+    items = await manager.get_by_type(MemoryType.LONG_TERM, limit=limit)
     return [
         {
             "id": item.id,
