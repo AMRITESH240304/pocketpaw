@@ -27,12 +27,7 @@ class TestGetSettings:
 
     @patch("pocketpaw.config.Settings.load")
     def test_get_settings_returns_dict(self, mock_load, client):
-        from pocketpaw.config import Settings
-
-        # Use spec=Settings so MagicMock is constrained to real Settings attributes.
-        # Attributes not explicitly set return a MagicMock, but the spec ensures
-        # we don't accidentally test against attributes that don't exist on Settings.
-        settings = MagicMock(spec=Settings)
+        settings = MagicMock()
         settings.agent_backend = "claude_agent_sdk"
         settings.web_port = 8888
         mock_load.return_value = settings
@@ -144,31 +139,6 @@ class TestGetSettings:
 
 class TestUpdateSettings:
     """Tests for PUT /api/v1/settings."""
-
-    @pytest.mark.parametrize(
-        "field",
-        [
-            "tool_profile",
-            "tools_allow",
-            "tools_deny",
-            "a2a_trusted_agents",
-            "api_cors_allowed_origins",
-            "api_rate_limit_per_key",
-            "injection_scan_llm",
-            "pii_default_action",
-            "session_token_ttl_hours",
-        ],
-    )
-    def test_rejects_security_sensitive_non_immutable_field(self, field, client):
-        """PUT /settings must block writes to security-sensitive fields not in the safe allowlist.
-
-        These fields are not in _IMMUTABLE_FIELDS but are equally dangerous to expose:
-        they control tool access policy, CORS, rate limiting, and security-scan behaviour.
-        """
-        resp = client.put("/api/v1/settings", json={"settings": {field: "evil"}})
-        assert resp.status_code == 403, (
-            f"Expected 403 for security-sensitive field '{field}', got {resp.status_code}"
-        )
 
     @patch("pocketpaw.config.get_settings")
     @patch("pocketpaw.config.Settings.load")

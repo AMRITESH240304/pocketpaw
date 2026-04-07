@@ -36,4 +36,4 @@ def _reset_rate_limiters():
 
     yield
     for limiter in (api_limiter, auth_limiter, ws_limiter):
-        limiter.reset()
+        limiter._buckets.clear()

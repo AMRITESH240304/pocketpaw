@@ -828,15 +828,15 @@ wheels = [
 
 [[package]]
 name = "discord-cli-agent"
-version = "0.7.0"
+version = "0.6.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "discord-py" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5e/0e/757d3657635c763a51cf6fd00921452d036ade183f9bb12e05da69f71d99/discord_cli_agent-0.7.0.tar.gz", hash = "sha256:52696cb948b4d64726d52b6e90aad2e336707527f6a9dfe2d45bca21627eb897", size = 45725, upload-time = "2026-03-22T13:08:48.605Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/5a/3da941ae2151485f9578a68eb53875e85962e1ebb7a96992487fc0f68013/discord_cli_agent-0.6.4.tar.gz", hash = "sha256:05d452bda26b01acde26ba6dfcef34e1a7e03ed1f343a9cff981e18f5f710c75", size = 34201, upload-time = "2026-03-16T10:15:13.145Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ea/9b/4473edc24330dd5bdfd8a6cc5bff2b592055b0881d80e9d46a061e6dd617/discord_cli_agent-0.7.0-py3-none-any.whl", hash = "sha256:5b8dc65c0a81adae7a49e3d6893e92b9467abd761014a7746949dd9f4b3469ca", size = 47945, upload-time = "2026-03-22T13:08:47.201Z" },
+    { url = "https://files.pythonhosted.org/packages/49/b6/a6339cd0be37fff1d4514e95020e26e585e82db39092dafefb9691afe77a/discord_cli_agent-0.6.4-py3-none-any.whl", hash = "sha256:d429dbfe87d069382b6b44b0c012218777b73a5c1df899308fe87dcf32281a09", size = 36624, upload-time = "2026-03-16T10:15:11.691Z" },
 ]
 
 [[package]]
@@ -3879,11 +3879,11 @@ requires-dist = [
     { name = "deepagents", marker = "extra == 'all'", specifier = ">=0.1.0" },
     { name = "deepagents", marker = "extra == 'deep-agents'", specifier = ">=0.1.0" },
     { name = "deepagents", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "discord-cli-agent", marker = "extra == 'all'", specifier = ">=0.7.0" },
-    { name = "discord-cli-agent", marker = "extra == 'all-channels'", specifier = ">=0.7.0" },
-    { name = "discord-cli-agent", marker = "extra == 'channels'", specifier = ">=0.7.0" },
-    { name = "discord-cli-agent", marker = "extra == 'dev'", specifier = ">=0.7.0" },
-    { name = "discord-cli-agent", marker = "extra == 'discord'", specifier = ">=0.7.0" },
+    { name = "discord-cli-agent", marker = "extra == 'all'", specifier = ">=0.6.0" },
+    { name = "discord-cli-agent", marker = "extra == 'all-channels'", specifier = ">=0.6.0" },
+    { name = "discord-cli-agent", marker = "extra == 'channels'", specifier = ">=0.6.0" },
+    { name = "discord-cli-agent", marker = "extra == 'dev'", specifier = ">=0.6.0" },
+    { name = "discord-cli-agent", marker = "extra == 'discord'", specifier = ">=0.6.0" },
     { name = "elevenlabs", marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "elevenlabs", marker = "extra == 'all-tools'", specifier = ">=1.0.0" },
     { name = "elevenlabs", marker = "extra == 'dev'", specifier = ">=1.0.0" },
@@ -4003,7 +4003,7 @@ dev = [
     { name = "botbuilder-core", specifier = ">=4.16.0" },
     { name = "botbuilder-integration-aiohttp", specifier = ">=4.16.0" },
     { name = "deepagents", specifier = ">=0.1.0" },
-    { name = "discord-cli-agent", specifier = ">=0.7.0" },
+    { name = "discord-cli-agent", specifier = ">=0.6.4" },
     { name = "elevenlabs", specifier = ">=1.0.0" },
     { name = "github-copilot-sdk", specifier = ">=0.1.0" },
     { name = "google-adk", specifier = ">=1.0.0" },

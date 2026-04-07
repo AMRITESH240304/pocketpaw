@@ -102,10 +102,6 @@ class RateLimiter:
         reset_after = (1.0 - bucket.tokens) / self.rate if self.rate > 0 else 1.0
         return RateLimitInfo(False, self.capacity, 0, reset_after)
 
-    def reset(self) -> None:
-        """Clear all bucket state. Primarily useful for test isolation."""
-        self._buckets.clear()
-
     def cleanup(self, max_age: float = 3600.0) -> int:
         """Remove stale entries older than *max_age* seconds. Returns count removed."""
         now = time.monotonic()

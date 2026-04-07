@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -223,6 +222,8 @@ async def get_settings():
     flags, tool allowlists, injection-scan config, etc.) are intentionally
     omitted to prevent information disclosure (OWASP A01).
     """
+    from pathlib import Path
+
     from pocketpaw.config import Settings
 
     settings = Settings.load()
@@ -259,29 +260,12 @@ async def update_settings(request: Request):
                 if not is_valid:
                     warnings.append(warning)
 
-    # Block writes to immutable security-critical fields.
+    # Block writes to security-critical fields
     blocked = _IMMUTABLE_FIELDS.intersection(settings_data)
     if blocked:
         raise HTTPException(
             status_code=403,
             detail=f"Field(s) {', '.join(sorted(blocked))} cannot be modified via the API",
-        )
-
-    # Block writes to any field that is neither in the safe allowlist nor a
-    # recognised credential field.  This prevents an attacker from silently
-    # reconfiguring security-sensitive settings (tool_profile, a2a_trusted_agents,
-    # api_cors_allowed_origins, api_rate_limit_per_key, etc.) via the REST API.
-    from pocketpaw.credentials import SECRET_FIELDS as _SECRET_FIELDS
-
-    writable = _SAFE_SETTINGS_FIELDS | _SECRET_FIELDS
-    non_writable = {k for k in settings_data if not k.startswith("_") and k not in writable}
-    if non_writable:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"Field(s) {', '.join(sorted(non_writable))} are not writable via the API. "
-                "Only fields in the safe settings allowlist may be modified."
-            ),
         )
 
     async with _settings_lock:
