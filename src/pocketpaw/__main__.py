@@ -387,10 +387,17 @@ def _resolve_subargs(args) -> None:
         args.limit = defaults.get(cmd, 20)
 
 
-
-def _serve(fn, *args, port: int = 8888, max_attempts: int = 10, host: str = '127.0.0.1', **kwargs) -> None:
+def _serve(
+    fn,
+    *args,
+    port: int = 8888,
+    max_attempts: int = 10,
+    host: str = "127.0.0.1",
+    **kwargs,
+) -> None:
     import errno as _errno
     import socket as _socket
+
     current_port = port
     for attempt in range(max_attempts):
         with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
@@ -412,8 +419,9 @@ def _serve(fn, *args, port: int = 8888, max_attempts: int = 10, host: str = '127
             else:
                 raise
     raise RuntimeError(
-        f'No free port found after {max_attempts} attempts (tried {port}-{current_port - 1}).'
+        f"No free port found after {max_attempts} attempts (tried {port}-{current_port - 1})."
     )
+
 
 def main() -> None:
     """Main entry point."""
