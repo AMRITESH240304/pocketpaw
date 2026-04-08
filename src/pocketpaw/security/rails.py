@@ -4,11 +4,14 @@ Shared dangerous-command patterns — single source of truth.
 Every security rail in the codebase (Guardian, ShellTool, pocketpaw_native,
 claude_sdk) imports from here.  **Do not define ad-hoc pattern lists elsewhere.**
 
-Two exports:
+Exports:
   DANGEROUS_PATTERNS           – raw regex strings (case-insensitive intent)
   COMPILED_DANGEROUS_PATTERNS  – pre-compiled ``re.Pattern`` objects (IGNORECASE)
   DANGEROUS_SUBSTRINGS         – plain lowercase strings for substring matching
                                  (used by claude_sdk's PreToolUse hook)
+  is_substring_blocked()       – canonical helper; always prefer this over
+                                 iterating DANGEROUS_SUBSTRINGS directly so that
+                                 case-insensitive matching is guaranteed.
 """
 
 import re
@@ -146,3 +149,23 @@ DANGEROUS_SUBSTRINGS: list[str] = [
     "parted /dev/",
     "find / -delete",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Canonical helper — always use this instead of raw ``sub in command`` so
+# that case-insensitivity is enforced at the source and call sites cannot
+# accidentally re-introduce the case-sensitive bypass (OWASP A01).
+# ---------------------------------------------------------------------------
+
+
+def is_substring_blocked(command: str) -> str | None:
+    """Return the first matching substring if *command* is dangerous, else ``None``.
+
+    Matching is case-insensitive: ``'SUDO RM'`` is equivalent to ``'sudo rm'``.
+    Prefer this helper over iterating :data:`DANGEROUS_SUBSTRINGS` directly.
+    """
+    command_lower = command.lower()
+    for sub in DANGEROUS_SUBSTRINGS:
+        if sub in command_lower:
+            return sub
+    return None

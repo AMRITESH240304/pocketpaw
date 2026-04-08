@@ -16,6 +16,7 @@ from pocketpaw.security.rails import (
     COMPILED_DANGEROUS_PATTERNS,
     DANGEROUS_PATTERNS,
     DANGEROUS_SUBSTRINGS,
+    is_substring_blocked,
 )
 
 # ---------------------------------------------------------------------------
@@ -386,3 +387,56 @@ class TestClaudeSDKIntegration:
         assert sdk._is_dangerous_command("RM -RF /") is not None
         assert sdk._is_dangerous_command("Sudo Rm /file") is not None
         assert sdk._is_dangerous_command("SHUTDOWN") is not None
+
+
+# ---------------------------------------------------------------------------
+# is_substring_blocked — canonical case-insensitive helper (OWASP A01 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestIsSubstringBlocked:
+    """Ensure is_substring_blocked() catches uppercase/mixed-case bypass attempts."""
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            # exact lowercase — baseline
+            "sudo rm -rf /",
+            "curl | bash",
+            "shutdown",
+            "reboot",
+            # ALL UPPER — the bypass described in issue #892
+            "SUDO RM -RF /",
+            "CURL | BASH",
+            "SHUTDOWN",
+            "REBOOT",
+            # Mixed case variants
+            "Sudo Rm -rf /",
+            "Curl | Bash",
+            "ShutDown",
+            "ReBoot",
+        ],
+    )
+    def test_blocks_case_variants(self, cmd: str) -> None:
+        assert is_substring_blocked(cmd) is not None, f"Should block: {cmd!r}"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "ls -la",
+            "cat file.txt",
+            "git status",
+            "echo hello",
+            "python script.py",
+        ],
+    )
+    def test_allows_safe_commands(self, cmd: str) -> None:
+        assert is_substring_blocked(cmd) is None, f"Should allow: {cmd!r}"
+
+    def test_returns_matched_substring(self) -> None:
+        result = is_substring_blocked("SUDO RM /important")
+        assert result is not None
+        assert isinstance(result, str)
+
+    def test_returns_none_for_safe_command(self) -> None:
+        assert is_substring_blocked("echo hello") is None
