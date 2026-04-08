@@ -29,11 +29,22 @@ logger = logging.getLogger(__name__)
 
 def create_api_app():
     """Build a FastAPI application with v1 API routers and WebSocket."""
+    from contextlib import asynccontextmanager
+
     from fastapi import FastAPI, Query, WebSocket
     from fastapi.middleware.cors import CORSMiddleware
 
     from pocketpaw.api.v1 import mount_v1_routers
     from pocketpaw.config import Settings, get_access_token
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        from pocketpaw.dashboard_lifecycle import shutdown_event as lifecycle_shutdown
+        from pocketpaw.dashboard_lifecycle import startup_event as lifecycle_startup
+
+        await lifecycle_startup()
+        yield
+        await lifecycle_shutdown()
 
     app = FastAPI(
         lifespan=lifespan,
