@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 
 from pocketpaw.agents.claude_sdk import ClaudeAgentSDK
 from pocketpaw.agents.model_router import ModelSelection, TaskComplexity
-from pocketpaw.agents.protocol import AgentEvent
 
 # Patch target for local imports inside _fast_chat / chat
 _LLM_CLIENT = "pocketpaw.llm.client.resolve_llm_client"
