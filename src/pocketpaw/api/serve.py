@@ -128,19 +128,6 @@ def create_api_app():
         """WebSocket v1 short path — for clients using /v1/ws."""
         await _handle_ws(websocket, token, resume_session)
 
-    # # --- Lifecycle events -----------------------------------------------
-    # @app.on_event("startup")
-    # async def startup():
-    #     from pocketpaw.dashboard_lifecycle import startup_event
-
-    #     await startup_event()
-
-    # @app.on_event("shutdown")
-    # async def shutdown():
-    #     from pocketpaw.dashboard_lifecycle import shutdown_event
-
-    #     await shutdown_event()
-
     return app
 
 
