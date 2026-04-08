@@ -22,7 +22,7 @@ from typing import Any
 from pocketpaw.agents.backend import BackendInfo, Capability
 from pocketpaw.agents.protocol import AgentEvent
 from pocketpaw.config import Settings
-from pocketpaw.security.rails import DANGEROUS_SUBSTRINGS as DANGEROUS_PATTERNS
+from pocketpaw.security.rails import is_substring_blocked
 from pocketpaw.tools.policy import ToolPolicy
 
 logger = logging.getLogger(__name__)
@@ -214,12 +214,10 @@ class ClaudeSDKBackend:
             if pattern.search(command):
                 return pattern.pattern
 
-        # Secondary: substring matching (catches simple literal fragments)
-        command_lower = command.lower()
-        for pattern in DANGEROUS_PATTERNS:
-            if pattern.lower() in command_lower:
-                return pattern
-        return None
+        # Secondary: substring matching (catches simple literal fragments).
+        # is_substring_blocked() applies .lower() on both sides so that
+        # uppercase variants like "SUDO RM" are caught (OWASP A01).
+        return is_substring_blocked(command)
 
     # Patterns that indicate an OS-level "open file" command.
     _FILE_OPEN_PATTERNS = [
@@ -350,8 +348,17 @@ class ClaudeSDKBackend:
             logger.debug(f"✅ Allowed command: {command[:50]}...")
             return {}
         except Exception as e:
-            logger.error(f"Hook callback error (allowing command): {e}")
-            return {}
+            logger.error(f"Hook callback error (blocking command as precaution): {e}")
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        "Safety hook encountered an internal error — "
+                        "blocking command as a precaution"
+                    ),
+                }
+            }
 
     def _extract_text_from_message(self, message: Any) -> str:
         """Extract text content from an AssistantMessage.

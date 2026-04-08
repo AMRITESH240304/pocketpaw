@@ -272,7 +272,7 @@ Examples:
         "-p",
         type=int,
         default=8888,
-        help="Port for web server (default: 8888)",
+        help="Port for web server (default: 8888; auto-falls back if busy)",
     )
     parser.add_argument("--dev", action="store_true", help="Development mode with auto-reload")
     parser.add_argument(
@@ -311,10 +311,6 @@ Examples:
     )
 
     # ── Subcommand (positional) ─────────────────────────────────────────
-    # We use a single positional with nargs="*" to support:
-    #   pocketpaw channels start discord  (command=channels, rest=[start, discord])
-    #   pocketpaw config set key value    (command=config, rest=[set, key, value])
-    #   pocketpaw memory search foo       (command=memory, rest=[search, foo])
     parser.add_argument(
         "command",
         nargs="?",
@@ -370,28 +366,24 @@ def _resolve_subargs(args) -> None:
     cmd = args.command
 
     if cmd == "channels" and subargs:
-        args.subaction = subargs[0]  # start / stop
+        args.subaction = subargs[0]
         if len(subargs) > 1:
-            args.query = subargs[1]  # channel name
-
+            args.query = subargs[1]
     elif cmd == "sessions" and subargs:
-        args.subaction = subargs[0]  # delete / search
+        args.subaction = subargs[0]
         if len(subargs) > 1:
             args.query = subargs[1]
-
     elif cmd == "memory" and subargs:
-        args.subaction = subargs[0]  # search
+        args.subaction = subargs[0]
         if len(subargs) > 1:
             args.query = subargs[1]
-
     elif cmd == "config" and subargs:
-        args.subaction = subargs[0]  # set / validate / path
+        args.subaction = subargs[0]
         if len(subargs) > 1:
             args.key = subargs[1]
         if len(subargs) > 2:
             args.value = subargs[2]
 
-    # Apply default limits per command
     if args.limit is None:
         defaults = {"errors": 20, "logs": 50, "sessions": 20, "memory": 10}
         args.limit = defaults.get(cmd, 20)
