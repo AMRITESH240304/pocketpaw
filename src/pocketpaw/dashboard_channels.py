@@ -13,6 +13,7 @@ import asyncio
 import logging
 import re
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -466,8 +467,26 @@ async def install_extras(request: Request):
 
     # Map channel name → pip extra name (most match, except whatsapp → whatsapp-personal)
     extra_name = "whatsapp-personal" if extra == "whatsapp" else extra
+
+    # Scanner is currently developed as a local sibling package.
+    # Install directly from local path when available to avoid pulling an older
+    # published pocketpaw release that may not include the scanner extra.
+    pip_spec_override: str | None = None
+    if extra == "scanner":
+        scanner_pkg = Path(__file__).resolve().parents[2] / "pocketpaw-scanner"
+        if scanner_pkg.exists():
+            pip_spec_override = str(scanner_pkg)
+
     try:
-        result = await asyncio.to_thread(auto_install, extra_name, import_mod)
+        if pip_spec_override:
+            result = await asyncio.to_thread(
+                auto_install,
+                extra_name,
+                import_mod,
+                pip_spec_override,
+            )
+        else:
+            result = await asyncio.to_thread(auto_install, extra_name, import_mod)
     except RuntimeError as exc:
         return {"error": str(exc)}
 

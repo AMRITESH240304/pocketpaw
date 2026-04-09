@@ -67,6 +67,9 @@ dependencies = [
 # --- Feature extras ---
 vector = ["chromadb"]
 graph = ["networkx>=3.0"]
+scanner = [
+    "pocketpaw-scanner",
+]
 dashboard = [
     # Kept for backward compat — dashboard deps are now in core.
     # Users with `pip install pocketpaw[dashboard]` in scripts won't break.
@@ -281,6 +284,9 @@ dev = [
     "ruff>=0.4.0",
     "mypy>=1.8.0",
 ]
+
+[tool.uv.sources]
+pocketpaw-scanner = { path = "./pocketpaw-scanner", editable = true }
 
 [project.scripts]
 pocketpaw = "pocketpaw.__main__:main"
