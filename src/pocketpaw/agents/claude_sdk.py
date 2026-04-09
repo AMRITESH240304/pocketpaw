@@ -424,6 +424,20 @@ class ClaudeSDKBackend:
                 )
         return tools
 
+    # MCP servers whose functionality is already provided by Claude Code's
+    # built-in WebSearch tool.  Passing these causes duplicate/conflicting
+    # search behaviour and wastes context on redundant tool definitions.
+    _BUILTIN_SEARCH_MCP_NAMES = frozenset(
+        {
+            "brave-search",
+            "tavily-search",
+            "exa-search",
+            "Brave Search",
+            "Tavily Search",
+            "Exa Search",
+        }
+    )
+
     def _get_mcp_servers(self) -> dict[str, dict]:
         """Load enabled MCP server configs, filtered by tool policy.
 
@@ -431,6 +445,9 @@ class ClaudeSDKBackend:
         transport types: stdio, sse, and http — each with its own
         TypedDict shape (McpStdioServerConfig, McpSSEServerConfig,
         McpHttpServerConfig).
+
+        Web search MCP servers (Tavily, Brave, Exa) are excluded because
+        Claude Code already provides a built-in WebSearch tool.
         """
         try:
             from pocketpaw.mcp.config import load_mcp_config
@@ -441,6 +458,11 @@ class ClaudeSDKBackend:
         servers: dict[str, dict] = {}
         for cfg in configs:
             if not cfg.enabled:
+                continue
+            if cfg.name in self._BUILTIN_SEARCH_MCP_NAMES:
+                logger.info(
+                    "MCP server '%s' skipped — Claude Code has built-in WebSearch", cfg.name
+                )
                 continue
             if not self._policy.is_mcp_server_allowed(cfg.name):
                 logger.info("MCP server '%s' blocked by tool policy", cfg.name)
@@ -786,37 +808,24 @@ class ClaudeSDKBackend:
                     )
                     return
 
-            # Smart model routing — classify BEFORE prompt composition so we
-            # can skip tool instructions for SIMPLE messages and dispatch to
-            # the fast-path (direct API) for simple queries.
-            is_simple = False
+            # Smart model routing — classify complexity for model selection.
+            # All messages go through the Claude Code CLI subprocess which
+            # handles conversation compaction automatically (PreCompact hook).
+            # The previous _fast_chat direct-API path bypassed the CLI's
+            # built-in context management, causing unrecoverable "Prompt is
+            # too long" errors on long sessions.
             selection = None
             if self.settings.smart_routing_enabled and not is_non_anthropic:
-                from pocketpaw.agents.model_router import ModelRouter, TaskComplexity
+                from pocketpaw.agents.model_router import ModelRouter
 
                 model_router = ModelRouter(self.settings)
                 selection = model_router.classify(message)
-                is_simple = selection.complexity == TaskComplexity.SIMPLE
                 logger.info(
                     "Smart routing: %s -> %s (%s)",
                     selection.complexity.value,
                     selection.model,
                     selection.reason,
                 )
-
-            # Fast path: bypass CLI subprocess entirely for simple messages.
-            # Uses the Anthropic API directly (requires API key, already enforced above).
-            has_api_key = bool(llm.api_key or os.environ.get("ANTHROPIC_API_KEY"))
-            if is_simple and selection is not None and has_api_key:
-                identity = system_prompt or _DEFAULT_IDENTITY
-                async for event in self._fast_chat(
-                    message,
-                    system_prompt=identity,
-                    history=history,
-                    model=selection.model,
-                ):
-                    yield event
-                return
 
             # System prompt — instructions are now part of identity
             # (injected by BootstrapContext.to_system_prompt() via INSTRUCTIONS.md)

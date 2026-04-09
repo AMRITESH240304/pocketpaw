@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 
 from pocketpaw.agents.claude_sdk import ClaudeAgentSDK
 from pocketpaw.agents.model_router import ModelSelection, TaskComplexity
-from pocketpaw.agents.protocol import AgentEvent
 
 # Patch target for local imports inside _fast_chat / chat
 _LLM_CLIENT = "pocketpaw.llm.client.resolve_llm_client"
@@ -263,15 +262,24 @@ async def test_fast_chat_merges_consecutive_roles():
 
 
 async def test_chat_dispatches_fast_path_for_simple():
-    """chat() should call _fast_chat for SIMPLE messages."""
+    """SIMPLE messages now go through the persistent CLI path (fast-chat disabled)."""
     sdk = _make_sdk()
 
-    # Stub _fast_chat to yield a known event
-    async def _fake_fast_chat(msg, *, system_prompt, history, model):
-        yield AgentEvent(type="message", content="fast!")
-        yield AgentEvent(type="done", content="")
+    # Create a fake response message — same setup as moderate path
+    fake_msg = MagicMock()
+    fake_msg.__class__.__name__ = "AssistantMessage"
+    fake_msg.content = "simple response"
 
-    sdk._fast_chat = _fake_fast_chat
+    fake_client = _FakeSDKClient(responses=[fake_msg])
+
+    sdk._ClaudeSDKClient = lambda **kwargs: fake_client
+    sdk._ClaudeAgentOptions = MagicMock()
+    sdk._HookMatcher = MagicMock()
+    sdk._StreamEvent = None
+    sdk._AssistantMessage = None
+    sdk._SystemMessage = None
+    sdk._UserMessage = None
+    sdk._ResultMessage = None
 
     selection = ModelSelection(
         complexity=TaskComplexity.SIMPLE,
@@ -286,17 +294,19 @@ async def test_chat_dispatches_fast_path_for_simple():
         mock_llm.is_gemini = False
         mock_llm.is_litellm = False
         mock_llm.is_openrouter = False
+        mock_llm.to_sdk_env.return_value = {"ANTHROPIC_API_KEY": "sk-test"}
         mock_resolve.return_value = mock_llm
 
         with patch(_MODEL_ROUTER) as MockRouter:
             MockRouter.return_value.classify.return_value = selection
+            with patch.object(ClaudeAgentSDK, "_get_mcp_servers", return_value={}):
+                events = []
+                async for ev in sdk.run("hi", system_prompt="identity"):
+                    events.append(ev)
 
-            events = []
-            async for ev in sdk.run("hi", system_prompt="identity"):
-                events.append(ev)
-
-    assert any(e.content == "fast!" for e in events)
-    assert events[-1].type == "done"
+    # Simple messages now use the persistent client (same as moderate)
+    assert fake_client.queries == ["hi"]
+    assert any(e.type == "done" for e in events)
 
 
 async def test_chat_uses_persistent_client_for_moderate():
