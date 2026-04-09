@@ -1,7 +1,7 @@
-# Updated: 2026-03-17 — Release 0.4.10: Soul Protocol, agent primitives, Discord overhaul, LiteLLM.
+# Updated: 2026-04-09 — Release 0.4.16: security rollup (CredentialStore v2, WS auth, dangerous-cmd hardening, OWASP fixes), discli 0.7, soul 0.2.9, Python 3.14 warning, fast-chat disabled for CLI compaction.
 [project]
 name = "pocketpaw"
-version = "0.4.15"
+version = "0.4.16"
 description = "The AI agent that runs on your laptop, not a datacenter. OpenClaw alternative with one-command install."
 readme = "README.md"
 license = "MIT"
