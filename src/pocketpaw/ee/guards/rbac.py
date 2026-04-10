@@ -95,7 +95,7 @@ def check_workspace_role(
     resolved = role if isinstance(role, WorkspaceRole) else WorkspaceRole.from_str(role)
     if resolved.level < minimum.level:
         raise Forbidden(
-            code="role_insufficient",
+            code="workspace.insufficient_role",
             detail=f"Requires {minimum.value}, got {resolved.value}",
         )
 
@@ -109,6 +109,6 @@ def check_pocket_access(
     resolved = access if isinstance(access, PocketAccess) else PocketAccess.from_str(access)
     if resolved.level < minimum.level:
         raise Forbidden(
-            code="access_insufficient",
+            code="pocket.insufficient_access",
             detail=f"Requires {minimum.value}, got {resolved.value}",
         )

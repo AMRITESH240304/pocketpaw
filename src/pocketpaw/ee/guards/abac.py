@@ -112,7 +112,7 @@ def evaluate_policy(ctx: PolicyContext) -> PolicyResult:
         if feature not in allowed_features:
             return PolicyResult(
                 allowed=False,
-                code="plan_feature_denied",
+                code="plan.feature_denied",
                 detail=f"Feature {feature!r} requires a higher plan (current: {ctx.plan})",
             )
 
@@ -121,7 +121,7 @@ def evaluate_policy(ctx: PolicyContext) -> PolicyResult:
     if minimum_role is not None and ctx.role.level < minimum_role.level:
         return PolicyResult(
             allowed=False,
-            code="role_insufficient",
+            code="workspace.insufficient_role",
             detail=f"Action {ctx.action!r} requires {minimum_role.value}, got {ctx.role.value}",
         )
 
@@ -130,7 +130,7 @@ def evaluate_policy(ctx: PolicyContext) -> PolicyResult:
         if ctx.role.level > ctx.agent_creator_role.level:
             return PolicyResult(
                 allowed=False,
-                code="agent_ceiling_exceeded",
+                code="agent.ceiling_exceeded",
                 detail=f"Agent {ctx.agent_id} was created by {ctx.agent_creator_role.value}, "
                 f"cannot act as {ctx.role.value}",
             )
@@ -142,7 +142,7 @@ def evaluate_policy(ctx: PolicyContext) -> PolicyResult:
         if allowed_tools is not None and tool_name not in allowed_tools:
             return PolicyResult(
                 allowed=False,
-                code="tool_not_allowed",
+                code="agent.tool_not_allowed",
                 detail=f"Role {ctx.role.value} cannot use tool {tool_name!r}",
             )
 

@@ -123,7 +123,7 @@ class TestCheckWorkspaceRole:
     def test_member_fails_admin_check(self):
         with pytest.raises(Forbidden) as exc_info:
             check_workspace_role(WorkspaceRole.MEMBER, minimum=WorkspaceRole.ADMIN)
-        assert exc_info.value.code == "role_insufficient"
+        assert exc_info.value.code == "workspace.insufficient_role"
 
     def test_owner_passes_owner_check(self):
         check_workspace_role(WorkspaceRole.OWNER, minimum=WorkspaceRole.OWNER)
@@ -131,7 +131,7 @@ class TestCheckWorkspaceRole:
     def test_admin_fails_owner_check(self):
         with pytest.raises(Forbidden) as exc_info:
             check_workspace_role(WorkspaceRole.ADMIN, minimum=WorkspaceRole.OWNER)
-        assert exc_info.value.code == "role_insufficient"
+        assert exc_info.value.code == "workspace.insufficient_role"
 
     def test_accepts_raw_string(self):
         # "admin" string should resolve and pass an admin minimum check
@@ -156,7 +156,7 @@ class TestCheckPocketAccess:
     def test_view_fails_edit_check(self):
         with pytest.raises(Forbidden) as exc_info:
             check_pocket_access(PocketAccess.VIEW, minimum=PocketAccess.EDIT)
-        assert exc_info.value.code == "access_insufficient"
+        assert exc_info.value.code == "pocket.insufficient_access"
 
     def test_owner_passes_all(self):
         for level in (PocketAccess.VIEW, PocketAccess.COMMENT, PocketAccess.EDIT):
@@ -241,7 +241,7 @@ class TestEvaluatePolicy:
         )
         result = evaluate_policy(ctx)
         assert result.allowed is False
-        assert result.code == "plan_feature_denied"
+        assert result.code == "plan.feature_denied"
 
     def test_enterprise_plan_allows_all_features(self):
         enterprise_actions = ["automation.create", "audit.read", "pocket.create"]
@@ -255,7 +255,7 @@ class TestEvaluatePolicy:
             )
             result = evaluate_policy(ctx)
             # plan gate should not block — role gate might still apply
-            assert result.code != "plan_feature_denied", (
+            assert result.code != "plan.feature_denied", (
                 f"Enterprise plan should not gate {action!r}"
             )
 
@@ -284,7 +284,7 @@ class TestEvaluatePolicy:
         )
         result = evaluate_policy(ctx)
         assert result.allowed is False
-        assert result.code == "role_insufficient"
+        assert result.code == "workspace.insufficient_role"
 
     # --- Agent ceiling ---
 
@@ -301,7 +301,7 @@ class TestEvaluatePolicy:
         )
         result = evaluate_policy(ctx)
         assert result.allowed is False
-        assert result.code == "agent_ceiling_exceeded"
+        assert result.code == "agent.ceiling_exceeded"
 
     def test_agent_ceiling_allows_within_bounds(self):
         # agent was created by ADMIN, context role is also ADMIN → allowed
@@ -344,7 +344,7 @@ class TestEvaluatePolicy:
         )
         result = evaluate_policy(ctx)
         assert result.allowed is False
-        assert result.code == "tool_not_allowed"
+        assert result.code == "agent.tool_not_allowed"
 
     def test_tool_whitelist_allows_member_search(self):
         # "web_search" is explicitly in MEMBER's allowed tool set
@@ -617,5 +617,97 @@ class TestRequirePlanFeatureDep:
         resp = client.get(
             "/feature-check",
             headers={"X-Workspace-Id": "ws1"},
+        )
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# require_policy — full ABAC integration with agent ceiling
+# ---------------------------------------------------------------------------
+
+
+def _policy_check_app(
+    *,
+    role: str = "admin",
+    plan: str = "enterprise",
+    workspace_id: str = "ws1",
+    action: str = "settings.write",
+    agent_id: str | None = None,
+    agent_creator_role: str | None = None,
+) -> FastAPI:
+    """Minimal app wiring require_policy with optional agent context."""
+    from pocketpaw.ee.guards.deps import require_policy
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def inject(request: Request, call_next):
+        _inject_workspace_state(request, role=role, plan=plan, workspace_id=workspace_id)
+        if agent_id and agent_creator_role:
+            request.state.agent_context = {
+                "agent_id": agent_id,
+                "creator_role": agent_creator_role,
+            }
+        return await call_next(request)
+
+    @app.get("/policy-check", dependencies=[Depends(require_policy(action))])
+    async def policy_endpoint():
+        return {"ok": True}
+
+    return app
+
+
+class TestRequirePolicyDep:
+    """Tests for the require_policy FastAPI dependency — full ABAC chain."""
+
+    def test_passes_when_role_and_plan_sufficient(self):
+        app = _policy_check_app(role="admin", plan="enterprise", action="settings.write")
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/policy-check", headers={"X-Workspace-Id": "ws1"})
+        assert resp.status_code == 200
+
+    def test_blocks_plan_feature(self):
+        app = _policy_check_app(role="admin", plan="team", action="automation.create")
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/policy-check", headers={"X-Workspace-Id": "ws1"})
+        assert resp.status_code == 403
+
+    def test_blocks_insufficient_role(self):
+        app = _policy_check_app(role="member", plan="enterprise", action="workspace.delete")
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/policy-check", headers={"X-Workspace-Id": "ws1"})
+        assert resp.status_code == 403
+
+    def test_agent_ceiling_blocks_via_dep(self):
+        """Agent created by member, acting as admin — must be denied."""
+        app = _policy_check_app(
+            role="admin",
+            plan="enterprise",
+            action="settings.write",
+            agent_id="agent-42",
+            agent_creator_role="member",
+        )
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get(
+            "/policy-check",
+            headers={"X-Workspace-Id": "ws1"},
+            params={"agent_id": "agent-42"},
+        )
+        assert resp.status_code == 403
+
+    def test_agent_ceiling_allows_within_bounds(self):
+        """Agent created by admin, acting as admin — should pass."""
+        app = _policy_check_app(
+            role="admin",
+            plan="enterprise",
+            action="settings.write",
+            agent_id="agent-99",
+            agent_creator_role="admin",
+        )
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get(
+            "/policy-check",
+            headers={"X-Workspace-Id": "ws1"},
+            params={"agent_id": "agent-99"},
         )
         assert resp.status_code == 200

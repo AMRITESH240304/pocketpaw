@@ -92,7 +92,7 @@ def require_plan_feature(feature: str) -> _GuardDep:
         if feature not in allowed:
             raise HTTPException(
                 status_code=403,
-                detail=f"plan_feature_denied: {feature!r} not available on {plan} plan",
+                detail=f"plan.feature_denied: {feature!r} not available on {plan} plan",
             )
 
     return _guard
@@ -107,6 +107,17 @@ def require_policy(action: str) -> _GuardDep:
         membership = getattr(request.state, "workspace_membership", None)
         role_str = membership.get("role", "member") if membership else "member"
 
+        # Agent ceiling: if an agent is acting, resolve its creator's role
+        # from the agent_context populated by the agent execution middleware.
+        agent_id = request.query_params.get("agent_id")
+        agent_creator_role: WorkspaceRole | None = None
+        if agent_id:
+            agent_ctx = getattr(request.state, "agent_context", None)
+            if agent_ctx and agent_ctx.get("agent_id") == agent_id:
+                creator_role_str = agent_ctx.get("creator_role")
+                if creator_role_str:
+                    agent_creator_role = WorkspaceRole.from_str(creator_role_str)
+
         policy_ctx = PolicyContext(
             user_id=ctx.get("user_id", ""),
             workspace_id=ws_id,
@@ -115,7 +126,8 @@ def require_policy(action: str) -> _GuardDep:
             resource_id=request.query_params.get("resource_id"),
             resource_type=request.query_params.get("resource_type"),
             plan=getattr(request.state, "workspace_plan", "team"),
-            agent_id=request.query_params.get("agent_id"),
+            agent_id=agent_id,
+            agent_creator_role=agent_creator_role,
         )
 
         result = evaluate_policy(policy_ctx)
