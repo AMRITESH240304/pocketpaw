@@ -1,5 +1,8 @@
 """Enterprise auth — fastapi-users with JWT cookie + bearer transport.
 
+Changes: Added seed_workspace() to auto-create default workspace + General group
+on first boot, so admin can immediately use the app after seeding.
+
 Provides:
 - POST /auth/register — sign up with email + password
 - POST /auth/login — sign in, returns JWT cookie + token
@@ -8,6 +11,7 @@ Provides:
 - PATCH /auth/me — update profile
 
 Admin seeding: call seed_admin() on startup to ensure a default admin exists.
+Workspace seeding: call seed_workspace() after seed_admin() to bootstrap first workspace.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from fastapi_users import schemas as fastapi_users_schemas
 from pydantic import BaseModel
 
 from ee.cloud.models.user import OAuthAccount, User, WorkspaceMembership
+from ee.cloud.models.workspace import Workspace, WorkspaceSettings
 
 logger = logging.getLogger(__name__)
 
@@ -168,4 +173,81 @@ async def seed_admin(
         return await User.find_one(User.email == email)
     except Exception as exc:
         logger.error("Failed to seed admin: %s", exc)
+        return None
+
+
+async def seed_workspace(admin: User | None = None) -> Workspace | None:
+    """Create a default workspace and General chat group if none exist.
+
+    Called after seed_admin() on startup. Skips if any workspace already exists.
+    """
+    from datetime import UTC, datetime
+
+    if admin is None:
+        admin = await User.find_one(User.is_superuser == True)  # noqa: E712
+        if not admin:
+            logger.debug("No admin user found — skipping workspace seed")
+            return None
+
+    # Skip if admin already has a workspace
+    if admin.workspaces:
+        logger.debug("Admin already has workspace(s) — skipping seed")
+        return None
+
+    # Also skip if any workspace exists at all
+    existing = await Workspace.find_one()
+    if existing:
+        logger.debug("Workspace already exists — skipping seed")
+        return None
+
+    ws_name = os.environ.get("DEFAULT_WORKSPACE_NAME", "PocketPaw")
+    ws_slug = os.environ.get("DEFAULT_WORKSPACE_SLUG", "pocketpaw")
+
+    try:
+        ws = Workspace(
+            name=ws_name,
+            slug=ws_slug,
+            owner=str(admin.id),
+            plan="enterprise",
+            seats=50,
+            settings=WorkspaceSettings(),
+        )
+        await ws.insert()
+
+        admin.workspaces.append(
+            WorkspaceMembership(
+                workspace=str(ws.id),
+                role="owner",
+                joined_at=datetime.now(UTC),
+            )
+        )
+        admin.active_workspace = str(ws.id)
+        await admin.save()
+
+        logger.info(
+            "Default workspace created: %s (slug: %s, id: %s)",
+            ws_name, ws_slug, ws.id,
+        )
+
+        # Create a default "General" chat group
+        try:
+            from ee.cloud.models.group import Group
+
+            group = Group(
+                workspace=str(ws.id),
+                name="General",
+                slug="general",
+                description="Default channel for team discussion",
+                type="public",
+                owner=str(admin.id),
+                members=[str(admin.id)],
+            )
+            await group.insert()
+            logger.info("Default 'General' group created in workspace %s", ws_name)
+        except Exception as exc:
+            logger.warning("Failed to create default group (non-fatal): %s", exc)
+
+        return ws
+    except Exception as exc:
+        logger.error("Failed to seed workspace: %s", exc)
         return None

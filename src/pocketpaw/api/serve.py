@@ -81,8 +81,9 @@ def create_api_app():
     try:
         from ee.cloud import mount_cloud
         mount_cloud(app)
-    except ImportError:
-        pass
+        logger.info("Enterprise cloud module mounted successfully")
+    except ImportError as exc:
+        logger.debug("Enterprise cloud module not available: %s", exc)
     except Exception:
         logger.warning("Cloud module mount failed", exc_info=True)
 

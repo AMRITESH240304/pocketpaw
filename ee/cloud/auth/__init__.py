@@ -13,6 +13,7 @@ from ee.cloud.auth.core import (  # noqa: F401
     UserCreate,
     UserManager,
     seed_admin,
+    seed_workspace,
     SECRET,
     TOKEN_LIFETIME,
 )
