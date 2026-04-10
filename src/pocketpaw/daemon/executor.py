@@ -11,6 +11,7 @@ When an intention triggers:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
@@ -170,12 +171,17 @@ class IntentionExecutor:
         if not self.stream_callback:
             logger.warning("No stream callback set, results will be discarded")
 
-        async for chunk in self.execute(intention, session_meta=session_meta):
-            if self.stream_callback:
-                try:
-                    await self.stream_callback(intention["id"], chunk)
-                except Exception as e:
-                    logger.error(f"Error in stream callback: {e}")
+        try:
+            async for chunk in self.execute(intention, session_meta=session_meta):
+                if self.stream_callback:
+                    try:
+                        await self.stream_callback(intention["id"], chunk)
+                    except Exception as e:
+                        logger.error(f"Error in stream callback: {e}")
+        except asyncio.CancelledError:
+            logger.warning(f"Intention execution cancelled: {intention.get('name', intention.get('id', '?'))}")
+        except Exception as e:
+            logger.error(f"Intention execution failed: {intention.get('name', '?')}: {e}")
 
     async def execute_by_id(self, intention_id: str) -> AsyncIterator[dict]:
         """

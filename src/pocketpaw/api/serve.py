@@ -77,6 +77,16 @@ def create_api_app():
     app.include_router(mission_control_router, prefix="/api/mission-control")
     app.include_router(deep_work_router, prefix="/api/deep-work")
 
+    # --- Mount enterprise cloud module FIRST (takes priority over core) --
+    try:
+        from ee.cloud import mount_cloud
+        mount_cloud(app)
+        logger.info("Enterprise cloud module mounted successfully")
+    except ImportError as exc:
+        logger.debug("Enterprise cloud module not available: %s", exc)
+    except Exception:
+        logger.warning("Cloud module mount failed", exc_info=True)
+
     # --- Mount all /api/v1/ routers -------------------------------------
     mount_v1_routers(app)
 

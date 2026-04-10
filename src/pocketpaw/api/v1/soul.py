@@ -19,6 +19,157 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Soul"], dependencies=[Depends(require_scope("settings:read"))])
 
 
+@router.get("/soul/dashboard")
+async def get_soul_dashboard():
+    """Full soul dashboard data — identity, OCEAN, state, memories, bonds, evolution."""
+    from pocketpaw.soul.manager import get_soul_manager
+
+    mgr = get_soul_manager()
+    if mgr is None or mgr.soul is None:
+        return {"enabled": False}
+
+    soul = mgr.soul
+    state = soul.state
+
+    # Identity
+    # Calculate age safely (handle naive/aware datetime mismatch)
+    age_days = 0
+    born_iso = ""
+    if hasattr(soul, "born") and soul.born:
+        born_iso = soul.born.isoformat()
+        try:
+            from datetime import UTC, datetime
+            now = datetime.now(UTC)
+            born = soul.born if soul.born.tzinfo else soul.born.replace(tzinfo=UTC)
+            age_days = (now - born).days
+        except Exception:
+            pass
+
+    identity = {
+        "name": soul.name,
+        "archetype": getattr(soul, "archetype", ""),
+        "did": getattr(soul, "did", ""),
+        "born": born_iso,
+        "age_days": age_days,
+        "lifecycle": getattr(soul, "lifecycle", "active"),
+        "values": list(getattr(soul, "values", [])),
+        "incarnation": getattr(soul, "incarnation", 1),
+    }
+
+    # OCEAN personality
+    ocean = {}
+    if hasattr(soul, "ocean"):
+        o = soul.ocean
+        ocean = {
+            "openness": getattr(o, "openness", 0.5),
+            "conscientiousness": getattr(o, "conscientiousness", 0.5),
+            "extraversion": getattr(o, "extraversion", 0.5),
+            "agreeableness": getattr(o, "agreeableness", 0.5),
+            "neuroticism": getattr(o, "neuroticism", 0.5),
+        }
+
+    # State
+    soul_state = {
+        "mood": getattr(state, "mood", "neutral"),
+        "energy": getattr(state, "energy", 1.0),
+        "social_battery": getattr(state, "social_battery", 1.0),
+        "focus": getattr(state, "focus", "general"),
+    }
+
+    # Core memory
+    core_memory = {"persona": "", "human": ""}
+    if hasattr(soul, "get_core_memory"):
+        try:
+            cm = soul.get_core_memory()
+            core_memory = cm.model_dump() if hasattr(cm, "model_dump") else {}
+        except Exception:
+            pass
+
+    # Communication style
+    communication = {
+        "warmth": "medium", "verbosity": "low", "humor_style": "dry", "emoji_usage": "minimal",
+    }
+    if hasattr(soul, "communication"):
+        c = soul.communication
+        communication = {
+            "warmth": getattr(c, "warmth", "medium"),
+            "verbosity": getattr(c, "verbosity", "low"),
+            "humor_style": getattr(c, "humor_style", "dry"),
+            "emoji_usage": getattr(c, "emoji_usage", "minimal"),
+        }
+
+    # Skills
+    skills = []
+    if hasattr(soul, "skills"):
+        for s in soul.skills:
+            skills.append({
+                "id": getattr(s, "id", ""),
+                "name": getattr(s, "name", ""),
+                "level": getattr(s, "level", 1),
+                "xp": getattr(s, "xp", 0),
+                "xp_to_next": getattr(s, "xp_to_next", 100),
+            })
+
+    # Bond
+    bond = None
+    if hasattr(soul, "bond") and soul.bond:
+        try:
+            bond = {
+                "bonded_to": getattr(soul.bond, "bonded_to", ""),
+                "strength": getattr(soul.bond, "bond_strength", 0),
+                "interaction_count": getattr(soul.bond, "interaction_count", 0),
+                "bonded_at": soul.bond.bonded_at.isoformat() if hasattr(soul.bond, "bonded_at") and soul.bond.bonded_at else "",
+            }
+        except Exception:
+            pass
+
+    # Memory stats
+    memory = {"episodic": 0, "semantic": 0, "procedural": 0, "graph_nodes": 0, "total": 0}
+    if hasattr(soul, "memory_count"):
+        memory["total"] = soul.memory_count
+
+    # Evolution log
+    evolution = []
+    if hasattr(soul, "evolution_log"):
+        for e in (soul.evolution_log or [])[-20:]:
+            evolution.append({
+                "id": getattr(e, "id", ""),
+                "trait": getattr(e, "trait", ""),
+                "old_value": str(getattr(e, "old_value", "")),
+                "new_value": str(getattr(e, "new_value", "")),
+                "reason": getattr(e, "reason", None),
+                "approved": getattr(e, "approved", None),
+                "proposed_at": e.proposed_at.isoformat() if hasattr(e, "proposed_at") and e.proposed_at else "",
+            })
+
+    # Self model
+    self_model = []
+    if hasattr(soul, "self_model") and soul.self_model:
+        try:
+            images = soul.self_model.get_active_self_images(limit=10)
+            self_model = [
+                {"domain": img.domain, "confidence": img.confidence, "evidence_count": getattr(img, "evidence_count", 0)}
+                for img in images
+            ]
+        except Exception:
+            pass
+
+    return {
+        "enabled": True,
+        "identity": identity,
+        "ocean": ocean,
+        "state": soul_state,
+        "core_memory": core_memory,
+        "communication": communication,
+        "skills": skills,
+        "bond": bond,
+        "memory": memory,
+        "evolution": evolution,
+        "self_model": self_model,
+        "observe_count": mgr.observe_count,
+    }
+
+
 @router.get("/soul/status")
 async def get_soul_status():
     """Return current soul state (mood, energy, personality, domains)."""

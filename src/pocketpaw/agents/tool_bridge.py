@@ -392,7 +392,12 @@ def get_tool_instructions_compact(settings: Any, backend: str = "opencode") -> s
         "# PocketPaw Tools",
         "",
         "You have access to the following PocketPaw tools.",
-        "To use a tool, run: `python -m pocketpaw.tools.cli <tool_name> '<json_args>'`",
+        "To use a tool, pipe JSON via stdin (avoids bash $-expansion issues):",
+        "```",
+        "echo '<json_args>' | python -m pocketpaw.tools.cli <tool_name>",
+        "```",
+        "IMPORTANT: Always use single quotes around JSON to prevent bash from",
+        "expanding $ signs in values like prices ($74.30) or currency amounts.",
         "",
     ]
     for tool_name in sorted(allowed):

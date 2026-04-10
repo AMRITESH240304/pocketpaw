@@ -1,6 +1,7 @@
 """Configuration management for PocketPaw.
 
 Changes:
+  - 2026-04-04: Added soul_cognitive_model setting for cheaper cognitive processing.
   - 2026-03-16: Use Literal types for whatsapp_mode, tts_provider, stt_provider (#638).
   - 2026-02-17: Added health_check_on_startup field for Health Engine.
   - 2026-02-14: Add migration warning for old ~/.pocketclaw/ config dir and POCKETCLAW_ env vars.
@@ -369,6 +370,14 @@ class Settings(BaseSettings):
     )
     vectordb_path: str = Field(
         default="~/.pocketpaw/chroma_db", description="Storage path for the vector database"
+    )
+    vectordb_embedding_provider: str = Field(
+        default="default",
+        description="Embedding provider: 'default' (sentence-transformers), 'openai', 'huggingface'",
+    )
+    vectordb_embedding_model: str = Field(
+        default="all-MiniLM-L6-v2",
+        description="Embedding model name. For HuggingFace: any model ID (e.g. 'BAAI/bge-small-en-v1.5'). For OpenAI: 'text-embedding-3-small'",
     )
     memory_use_inference: bool = Field(
         default=True, description="Use LLM to extract facts from memories (only for mem0 backend)"
@@ -808,7 +817,7 @@ class Settings(BaseSettings):
 
     # Soul Protocol
     soul_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Enable soul-protocol for persistent AI identity, memory, and emotion",
     )
     soul_name: str = Field(
@@ -864,6 +873,31 @@ class Settings(BaseSettings):
             "mood_inertia: resistance to mood change (0-1). "
             "tired_threshold: energy level that triggers fatigue. "
             "auto_regen: passive energy recovery rate."
+        ),
+    )
+    kb_scope: str = Field(
+        default="",
+        description=(
+            "Knowledge base scope to query via the `kb` CLI (github.com/qbtrix/kb-go). "
+            "When set and the kb binary is on PATH, relevant articles are injected "
+            "into the agent system prompt alongside soul memories. Empty = disabled."
+        ),
+    )
+    kb_binary: str = Field(
+        default="kb",
+        description="Path to the kb binary (default: `kb` on PATH)",
+    )
+    kb_limit: int = Field(
+        default=3,
+        description="Number of top articles to inject from kb search (default: 3)",
+    )
+
+    soul_cognitive_model: str = Field(
+        default="",
+        description=(
+            "Model to use for soul cognitive processing (sentiment, significance, "
+            "fact/entity extraction). Empty = use main agent backend. Set to a cheaper "
+            "model like 'claude-haiku-4-5-20251001' to reduce cost. Requires anthropic SDK."
         ),
     )
 

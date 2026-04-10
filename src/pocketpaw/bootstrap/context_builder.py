@@ -1,6 +1,7 @@
 """
 Builder for assembling the full agent context.
 Created: 2026-02-02
+Updated: 2026-04-08 - kb injection: query kb-go (github.com/qbtrix/kb-go) for structured knowledge alongside soul memories
 Updated: 2026-04-01 - Context window budget tracking: priority-based injection with per-block caps
 Updated: 2026-03-10 - AGENTS.md injection: read project-specific constraints from target repos
 Updated: 2026-03-09 - Sanitize file_context paths before injecting into system prompt
@@ -38,6 +39,7 @@ _INJECTION_CAPS: dict[str, int | None] = {
     "identity": None,  # Critical — never capped
     "instructions": None,  # Critical — never capped
     "memory_context": 4000,
+    "kb_context": 3000,
     "sender_block": 500,
     "channel_hints": 500,
     "channel_instructions": 1000,
@@ -100,18 +102,24 @@ class AgentContextBuilder:
         """
         blocks: list[tuple[str, _Priority, str]] = []
 
-        # 1. Load static identity + memory context concurrently (independent I/O)
+        # 1. Load static identity, memory context, and kb context concurrently
+        # (independent I/O — identity is a function call, memory hits disk/vector db,
+        # kb shells out to a subprocess). asyncio.gather keeps the critical path fast.
         if include_memory:
             if user_query:
                 memory_coro = self.memory.get_semantic_context(user_query, sender_id=sender_id)
             else:
                 memory_coro = self.memory.get_context_for_agent(sender_id=sender_id)
-            context, memory_context = await asyncio.gather(
+            context, memory_context, kb_context = await asyncio.gather(
                 self.bootstrap.get_context(),
                 memory_coro,
+                self._get_kb_context(user_query),
             )
         else:
-            context = await self.bootstrap.get_context()
+            context, kb_context = await asyncio.gather(
+                self.bootstrap.get_context(),
+                self._get_kb_context(user_query),
+            )
             memory_context = ""
 
         base_prompt = context.to_system_prompt()
@@ -131,6 +139,19 @@ class AgentContextBuilder:
                 "do NOT call recall unless you need something not listed here)\n" + memory_context
             )
             blocks.append(("memory_context", _Priority.HIGH, mem_block))
+
+        # 2b. Inject kb (knowledge base) context — structured articles from source files
+        # This runs alongside soul memory: soul handles "what we discussed", kb handles
+        # "what the code currently says". The two complement each other, so we inject
+        # both when available. See https://github.com/qbtrix/kb-go for the kb tool.
+        if kb_context:
+            kb_block = (
+                "\n# Knowledge Base (relevant articles from the project wiki)\n"
+                "These are compiled from source files. Use them for implementation "
+                "details and current-state facts. Use soul_recall for past decisions "
+                "and conversation history.\n\n" + kb_context
+            )
+            blocks.append(("kb_context", _Priority.HIGH, kb_block))
 
         # 3. Inject sender identity block
         if sender_id:
@@ -177,6 +198,23 @@ class AgentContextBuilder:
                 if ctx_lines:
                     channel_instructions += "\n\n## Current Context\n" + "\n".join(ctx_lines)
                 blocks.append(("channel_instructions", _Priority.MEDIUM, channel_instructions))
+
+        # 4c. Inject pocket creation context (from pocket chat endpoint)
+        if metadata and metadata.get("pocket_system_context"):
+            blocks.append(("pocket_context", _Priority.HIGH, metadata["pocket_system_context"]))
+
+        # 4d. Inject current pocket info so the AI knows what pocket is open
+        if metadata and metadata.get("pocket_context"):
+            import json
+            pc = metadata["pocket_context"]
+            pocket_tag = (
+                f"\n<current-pocket>\n"
+                f"id: {pc.get('id', 'unknown')}\n"
+                f"name: {pc.get('name', 'Untitled')}\n"
+                f"widgets: {json.dumps(pc.get('widgets', []))}\n"
+                f"</current-pocket>\n"
+            )
+            blocks.append(("current_pocket", _Priority.HIGH, pocket_tag))
 
         # 5. Inject session key for session management tools
         if session_key:
@@ -317,6 +355,65 @@ class AgentContextBuilder:
             remaining -= len(content)
 
         return "\n\n".join(result_parts)
+
+    @staticmethod
+    async def _get_kb_context(user_query: str | None) -> str:
+        """Fetch relevant articles from the kb-go CLI.
+
+        Uses `kb search <query> --scope <scope> --context` to get pre-formatted
+        text ready for prompt injection. Runs the kb binary as a subprocess so
+        kb stays a standalone tool and paw-runtime never takes a hard dependency
+        on it.
+
+        Returns empty string on any failure (missing binary, missing scope,
+        empty query, timeout, non-zero exit). Failures never break prompt
+        building — kb is a nice-to-have, not a critical path.
+        """
+        if not user_query:
+            return ""
+
+        from pocketpaw.config import get_settings
+
+        settings = get_settings()
+        scope = (settings.kb_scope or "").strip()
+        if not scope:
+            return ""
+
+        binary = settings.kb_binary or "kb"
+        limit = str(settings.kb_limit or 3)
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                binary,
+                "search",
+                user_query,
+                "--scope",
+                scope,
+                "--context",
+                "--limit",
+                limit,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3.0)
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+                logger.debug("kb context fetch timed out after 3s")
+                return ""
+        except FileNotFoundError:
+            logger.debug("kb binary not found at %s — skipping kb injection", binary)
+            return ""
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("kb context fetch failed (non-fatal): %s", exc)
+            return ""
+
+        if proc.returncode != 0:
+            return ""
+
+        output = stdout.decode("utf-8", errors="replace").strip()
+        return output
 
     @staticmethod
     def _load_channel_instructions(channel: Channel) -> str:

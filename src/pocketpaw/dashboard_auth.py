@@ -332,6 +332,19 @@ async def _auth_dispatch(request: Request) -> Response | None:
         "/api/v1/mcp/oauth/callback",
         "/api/v1/oauth/authorize",
         "/api/v1/oauth/token",
+        "/api/v1/auth/login",
+        "/api/v1/auth/register",
+        "/api/v1/auth/bearer/login",
+        "/api/v1/auth/me",
+        "/api/v1/license",
+        # Enterprise cloud endpoints — JWT auth handled by fastapi-users, not this middleware
+        "/api/v1/chat",
+        "/api/v1/workspaces",
+        "/api/v1/pockets",
+        "/api/v1/sessions",
+        "/api/v1/agents",
+        "/api/v1/users",
+        "/ws/cloud",
     ]
 
     for exempt in exempt_paths:

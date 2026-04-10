@@ -158,3 +158,80 @@ class TestAssembleWithBudget:
         assert "sender" in result
         assert "session" in result
         assert "files" in result
+
+
+class TestKbContext:
+    """Unit tests for kb (knowledge base) context injection via the kb-go CLI."""
+
+    async def test_empty_query_returns_empty(self):
+        """No user query means nothing to search, so kb injection is skipped."""
+        result = await AgentContextBuilder._get_kb_context(None)
+        assert result == ""
+
+        result = await AgentContextBuilder._get_kb_context("")
+        assert result == ""
+
+    async def test_empty_scope_returns_empty(self, monkeypatch):
+        """If kb_scope is not configured, kb injection is a no-op."""
+        from unittest.mock import MagicMock
+
+        import pocketpaw.bootstrap.context_builder as ctx_mod
+
+        settings = MagicMock()
+        settings.kb_scope = ""
+        settings.kb_binary = "kb"
+        settings.kb_limit = 3
+        monkeypatch.setattr("pocketpaw.config.get_settings", lambda: settings)
+
+        result = await ctx_mod.AgentContextBuilder._get_kb_context("authentication")
+        assert result == ""
+
+    async def test_missing_binary_returns_empty(self, monkeypatch):
+        """If the kb binary isn't found, failure is silent — empty string returned."""
+        from unittest.mock import MagicMock
+
+        import pocketpaw.bootstrap.context_builder as ctx_mod
+
+        settings = MagicMock()
+        settings.kb_scope = "test-scope"
+        settings.kb_binary = "/nonexistent/kb-binary-that-does-not-exist"
+        settings.kb_limit = 3
+        monkeypatch.setattr("pocketpaw.config.get_settings", lambda: settings)
+
+        result = await ctx_mod.AgentContextBuilder._get_kb_context("authentication")
+        assert result == ""
+
+    async def test_successful_kb_fetch(self, monkeypatch):
+        """When kb returns output, the stdout text is injected verbatim."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        import pocketpaw.bootstrap.context_builder as ctx_mod
+
+        settings = MagicMock()
+        settings.kb_scope = "test-scope"
+        settings.kb_binary = "kb"
+        settings.kb_limit = 3
+        monkeypatch.setattr("pocketpaw.config.get_settings", lambda: settings)
+
+        # Fake the subprocess
+        fake_proc = MagicMock()
+        fake_proc.returncode = 0
+        fake_proc.communicate = AsyncMock(
+            return_value=(b"## Article 1\nauth module details\n", b"")
+        )
+
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            return fake_proc
+
+        monkeypatch.setattr(
+            "asyncio.create_subprocess_exec", fake_create_subprocess_exec
+        )
+
+        result = await ctx_mod.AgentContextBuilder._get_kb_context("auth")
+        assert "auth module details" in result
+
+    def test_kb_context_has_injection_cap(self):
+        """kb_context should have a reasonable cap to avoid blowing the context window."""
+        cap = _INJECTION_CAPS.get("kb_context")
+        assert cap is not None
+        assert 1000 <= cap <= 5000  # sanity range

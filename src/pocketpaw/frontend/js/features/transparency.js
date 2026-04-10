@@ -636,7 +636,7 @@ window.PocketPaw.Transparency = {
              */
             handleSystemEvent(data) {
                 const time = Tools.formatTime();
-                const eventType = data.event_type || '';
+                const eventType = data.event || data.event_type || '';
 
                 // Handle Mission Control events
                 if (eventType.startsWith('mc_')) {
