@@ -341,8 +341,7 @@ class Settings(BaseSettings):
     vectordb_embedding_provider: str = Field(
         default="default",
         description=(
-            "Embedding provider: 'default' (sentence-transformers),"
-            " 'openai', 'huggingface'"
+            "Embedding provider: 'default' (sentence-transformers), 'openai', 'huggingface'"
         ),
     )
     vectordb_embedding_model: str = Field(

@@ -617,14 +617,14 @@ async def pocket_chat_stream(body: ChatRequest):
                         )
                         logger.info("Pocket created: %s (%s)", spec.get("title", "?"), fmt)
                         pocket_cloud_id = edata.get("pocket_cloud_id")
-                        payload = json.dumps({
-                            "spec": spec,
-                            "session_id": safe_key,
-                            "pocket_cloud_id": pocket_cloud_id,
-                        })
-                        yield (
-                            f"event: pocket_created\ndata: {payload}\n\n"
+                        payload = json.dumps(
+                            {
+                                "spec": spec,
+                                "session_id": safe_key,
+                                "pocket_cloud_id": pocket_cloud_id,
+                            }
                         )
+                        yield (f"event: pocket_created\ndata: {payload}\n\n")
                     else:
                         logger.warning(
                             "pocket_created event dropped —"
@@ -660,13 +660,13 @@ async def pocket_chat_stream(body: ChatRequest):
                                 spec.get("title", spec.get("name", "?")),
                                 len(spec.get("widgets", [])),
                             )
-                            payload = json.dumps({
-                                "spec": spec,
-                                "session_id": safe_key,
-                            })
-                            yield (
-                                f"event: pocket_created\ndata: {payload}\n\n"
+                            payload = json.dumps(
+                                {
+                                    "spec": spec,
+                                    "session_id": safe_key,
+                                }
                             )
+                            yield (f"event: pocket_created\ndata: {payload}\n\n")
 
                 # Forward original event
                 yield (f"event: {etype}\ndata: {json.dumps(edata)}\n\n")

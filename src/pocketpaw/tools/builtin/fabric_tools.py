@@ -147,8 +147,7 @@ class FabricCreateTool(BaseTool):
                 "properties": {
                     "type": "object",
                     "description": (
-                        "For define_type: property definitions."
-                        " For create_object: property values."
+                        "For define_type: property definitions. For create_object: property values."
                     ),
                 },
                 "from_id": {

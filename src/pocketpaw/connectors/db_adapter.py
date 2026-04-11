@@ -130,8 +130,7 @@ class DatabaseAdapter:
                 connector_name=self.name,
                 status=ConnectorStatus.ERROR,
                 message=(
-                    "sqlalchemy[asyncio] not installed."
-                    " Run: uv pip install 'sqlalchemy[asyncio]'"
+                    "sqlalchemy[asyncio] not installed. Run: uv pip install 'sqlalchemy[asyncio]'"
                 ),
             )
 

@@ -151,8 +151,7 @@ async def test_connector_to_fabric_full_chain(tmp_path: Path) -> None:
         pocket_id="finance-hq",
         title=f"Review large invoice {large_inv.source_id}",
         description=(
-            f"Invoice amount ${large_inv.properties['amount_due'] / 100:.2f}"
-            " exceeds threshold"
+            f"Invoice amount ${large_inv.properties['amount_due'] / 100:.2f} exceeds threshold"
         ),
         recommendation="Review and confirm payment status with accounting team",
         trigger=ActionTrigger(
