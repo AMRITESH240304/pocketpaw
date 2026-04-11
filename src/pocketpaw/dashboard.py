@@ -207,6 +207,17 @@ app.include_router(mission_control_router, prefix="/api/mission-control")
 
 app.include_router(deep_work_router, prefix="/api/deep-work")
 
+# Mount enterprise cloud module FIRST (takes priority over core v1 routers)
+try:
+    from ee.cloud import mount_cloud
+
+    mount_cloud(app)
+    logger.info("Enterprise cloud module mounted successfully")
+except ImportError as exc:
+    logger.debug("Enterprise cloud module not available: %s", exc)
+except Exception:
+    logger.warning("Cloud module mount failed", exc_info=True)
+
 # Mount API v1 routers at /api/v1/ (canonical) — see api/v1/__init__.py
 mount_v1_routers(app)
 
@@ -217,6 +228,10 @@ try:
     _a2a_register_routes(app)
 except Exception as _a2a_exc:
     logger.warning("A2A Protocol unavailable — skipping router mount: %s", _a2a_exc)
+
+# Mount Socket.IO for enterprise real-time group chat
+# NOTE: Socket.IO ASGI wrapper is applied AFTER all routes/middleware are registered.
+# See bottom of file: the module-level `app` is replaced with the wrapped version.
 
 # Mount channel management router (webhooks, extras, channel status/toggle)
 app.include_router(channels_router)
@@ -1304,12 +1319,6 @@ async def export_session(id: str = "", format: str = "json"):
 async def get_long_term_memory(limit: int = 50):
     """Get long-term memories."""
     manager = get_memory_manager()
-    # Access store directly for filtered query, or use get_by_type if exposed
-    # Manager doesn't expose get_by_type publicly in facade
-    # (it used _store.get_by_type in get_context_for_agent)
-    # So we use filtered search or we should expose it.
-    # For now, let's use _store hack or add method to manager?
-    # I'll rely on a new Manager method or _store for now to keep it simple.
     items = await manager.get_by_type(MemoryType.LONG_TERM, limit=limit)
     return [
         {
@@ -1795,6 +1804,21 @@ def run_dashboard(
                 logger.error("Max restart limit (%d) reached, exiting.", _MAX_RESTARTS)
                 break
             logger.info("Restarting server with updated settings...")
+
+
+# ---------------------------------------------------------------------------
+# Wrap FastAPI app with Socket.IO ASGI middleware (enterprise real-time chat)
+# Must be AFTER all routes and middleware are registered.
+# ---------------------------------------------------------------------------
+try:
+    from ee.cloud.socketio_server import wrap_asgi_app
+
+    app = wrap_asgi_app(app)
+    logger.info("Socket.IO ASGI wrapper applied")
+except ImportError:
+    pass
+except Exception as _sio_exc:
+    logger.warning("Socket.IO wrapper failed: %s", _sio_exc)
 
 
 if __name__ == "__main__":

@@ -129,8 +129,11 @@ class ProactiveDaemon:
         session_meta: dict | None = intention.pop("_stale_session", None)
         logger.info(f"Intention triggered: {intention['name']}")
 
-        # Execute and stream results
-        await self.executor.execute_and_stream(intention, session_meta=session_meta)
+        # Execute and stream results — catch all errors so APScheduler doesn't crash
+        try:
+            await self.executor.execute_and_stream(intention, session_meta=session_meta)
+        except Exception as e:
+            logger.error(f"Intention trigger failed for {intention['name']}: {e}")
 
     # ==================== Intention Management API ====================
 
