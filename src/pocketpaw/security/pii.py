@@ -195,6 +195,9 @@ class PIIScanner:
 
     def _scan_native(self, text: str, source: str) -> PIIScanResult:
         """Native scanner path with policy-preserving replacement behavior."""
+        if _native_pii_detect is None:
+            raise RuntimeError("Native PII scanner is not available")
+
         native_matches = _native_pii_detect(text)
         logger.debug("Native PII scanner found %d matches", len(native_matches))
         if not native_matches:

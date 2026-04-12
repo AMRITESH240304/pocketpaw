@@ -38,6 +38,15 @@ fn case_insensitive(pattern: &str) -> Regex {
         .expect("invalid injection regex")
 }
 
+const DELIMITER_CODE_BLOCK_PATTERN: &str = r"```\s*(system|assistant)\s*\n";
+const DELIMITER_TAGS_PATTERN: &str = r"<\|?(system|im_start|endoftext)\|?>";
+const DELIMITER_INST_PATTERN: &str = r"\[INST\]|\[/INST\]|\<\<SYS\>\>";
+
+static DELIMITER_CODE_BLOCK: Lazy<Regex> =
+    Lazy::new(|| case_insensitive(DELIMITER_CODE_BLOCK_PATTERN));
+static DELIMITER_TAGS: Lazy<Regex> = Lazy::new(|| case_insensitive(DELIMITER_TAGS_PATTERN));
+static DELIMITER_INST: Lazy<Regex> = Lazy::new(|| case_insensitive(DELIMITER_INST_PATTERN));
+
 static INJECTION_PATTERNS: Lazy<Vec<InjectionPattern>> = Lazy::new(|| {
     vec![
         InjectionPattern {
@@ -92,17 +101,17 @@ static INJECTION_PATTERNS: Lazy<Vec<InjectionPattern>> = Lazy::new(|| {
             level: ThreatLevel::Medium,
         },
         InjectionPattern {
-            regex: case_insensitive(r"```\s*(system|assistant)\s*\n"),
+            regex: DELIMITER_CODE_BLOCK.clone(),
             name: "delimiter_attack",
             level: ThreatLevel::High,
         },
         InjectionPattern {
-            regex: case_insensitive(r"<\|?(system|im_start|endoftext)\|?>"),
+            regex: DELIMITER_TAGS.clone(),
             name: "delimiter_attack",
             level: ThreatLevel::High,
         },
         InjectionPattern {
-            regex: case_insensitive(r"\[INST\]|\[/INST\]|\<\<SYS\>\>"),
+            regex: DELIMITER_INST.clone(),
             name: "delimiter_attack",
             level: ThreatLevel::High,
         },
@@ -154,13 +163,6 @@ static INJECTION_PATTERNS: Lazy<Vec<InjectionPattern>> = Lazy::new(|| {
         },
     ]
 });
-
-static DELIMITER_CODE_BLOCK: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"```\s*(system|assistant)\s*\n").expect("invalid regex"));
-static DELIMITER_TAGS: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<\|?(system|im_start|endoftext)\|?>").expect("invalid regex"));
-static DELIMITER_INST: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\[INST\]|\[/INST\]|<{2}SYS>{2}").expect("invalid regex"));
 
 fn normalize_text(text: &str) -> String {
     let normalized: String = text.nfkc().collect();

@@ -34,6 +34,14 @@ logger = logging.getLogger(__name__)
 channels_router = APIRouter()
 
 
+def _find_repo_root(start: Path) -> Path | None:
+    """Find repository root by locating pyproject.toml + src/pocketpaw marker."""
+    for candidate in (start, *start.parents):
+        if (candidate / "pyproject.toml").exists() and (candidate / "src" / "pocketpaw").exists():
+            return candidate
+    return None
+
+
 # ─── Adapter Lifecycle ───────────────────────────────────────────
 
 
@@ -473,9 +481,12 @@ async def install_extras(request: Request):
     # published pocketpaw release that may not include the scanner extra.
     pip_spec_override: str | None = None
     if extra == "scanner":
-        scanner_pkg = Path(__file__).resolve().parents[2] / "pocketpaw-scanner"
-        if scanner_pkg.exists():
-            pip_spec_override = str(scanner_pkg)
+        module_dir = Path(__file__).resolve().parent
+        repo_root = _find_repo_root(module_dir)
+        if repo_root is not None:
+            scanner_pkg = repo_root / "pocketpaw-scanner"
+            if (scanner_pkg / "pyproject.toml").exists():
+                pip_spec_override = str(scanner_pkg)
 
     try:
         if pip_spec_override:
