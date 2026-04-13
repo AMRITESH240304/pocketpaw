@@ -457,15 +457,12 @@ class InstinctStore:
         async with self._conn() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT * FROM instinct_corrections"
-                " WHERE action_id = ? ORDER BY created_at DESC",
+                "SELECT * FROM instinct_corrections WHERE action_id = ? ORDER BY created_at DESC",
                 (action_id,),
             ) as cur:
                 return [self._row_to_correction(row) async for row in cur]
 
-    async def count_corrections_by_path(
-        self, pocket_id: str, path: str
-    ) -> int:
+    async def count_corrections_by_path(self, pocket_id: str, path: str) -> int:
         """Return how many corrections on this pocket touched a given path.
 
         Used by the soul bridge to decide when to promote a pattern from
