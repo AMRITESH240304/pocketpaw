@@ -852,8 +852,10 @@ class TestApproveEndpoint:
         approve_resp = client.post(f"/instinct/actions/{action_id}/approve")
         assert approve_resp.status_code == 200
         data = approve_resp.json()
-        assert data["status"] == "approved"
-        assert data["id"] == action_id
+        # Response shape now wraps the action + optional correction (Move 1 PR-A).
+        assert data["action"]["status"] == "approved"
+        assert data["action"]["id"] == action_id
+        assert data["correction"] is None
 
     def test_approve_removes_from_pending(self, client: TestClient) -> None:
         propose_resp = client.post("/instinct/actions", json=PROPOSE_PAYLOAD)
@@ -1017,7 +1019,7 @@ class TestFullLifecycle:
         # Step 3: approve
         approve_resp = client.post(f"/instinct/actions/{action_id}/approve")
         assert approve_resp.status_code == 200
-        assert approve_resp.json()["status"] == "approved"
+        assert approve_resp.json()["action"]["status"] == "approved"
 
         # Step 4: no longer in pending
         pending_resp_after = client.get("/instinct/actions/pending")

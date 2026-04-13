@@ -1,6 +1,9 @@
 # Instinct store — async SQLite operations for the decision pipeline.
 # Created: 2026-03-28 — Action lifecycle + audit log.
 # Updated: 2026-03-30 — Added limit param to _query_actions, list_actions() public method.
+# Updated: 2026-04-12 (Move 1 PR-A) — Corrections table + record_correction() and
+#   get_corrections*() methods for the correction loop. Human edits between
+#   proposal and approval land here, then feed soul-protocol on next proposal.
 
 from __future__ import annotations
 
@@ -11,6 +14,7 @@ from typing import Any
 
 import aiosqlite
 
+from ee.instinct.correction import Correction, CorrectionPatch
 from ee.instinct.models import (
     Action,
     ActionCategory,
@@ -59,10 +63,23 @@ CREATE TABLE IF NOT EXISTS instinct_audit (
     outcome TEXT
 );
 
+CREATE TABLE IF NOT EXISTS instinct_corrections (
+    id TEXT PRIMARY KEY,
+    action_id TEXT NOT NULL,
+    pocket_id TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    patches TEXT NOT NULL,
+    context_summary TEXT NOT NULL,
+    action_title TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_actions_pocket ON instinct_actions(pocket_id);
 CREATE INDEX IF NOT EXISTS idx_actions_status ON instinct_actions(status);
 CREATE INDEX IF NOT EXISTS idx_audit_pocket ON instinct_audit(pocket_id);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON instinct_audit(timestamp);
+CREATE INDEX IF NOT EXISTS idx_corrections_pocket ON instinct_corrections(pocket_id);
+CREATE INDEX IF NOT EXISTS idx_corrections_action ON instinct_corrections(action_id);
 """
 
 
@@ -372,6 +389,76 @@ class InstinctStore:
         entries = await self.query_audit(pocket_id=pocket_id, limit=10000)
         return json.dumps([e.model_dump(mode="json") for e in entries], indent=2)
 
+    # --- Corrections ---
+
+    async def record_correction(self, correction: Correction) -> Correction:
+        """Persist a Correction and log the event to the audit table."""
+        await self._ensure_schema()
+        async with self._conn() as db:
+            await db.execute(
+                "INSERT INTO instinct_corrections"
+                " (id, action_id, pocket_id, actor, patches,"
+                " context_summary, action_title, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    correction.id,
+                    correction.action_id,
+                    correction.pocket_id,
+                    correction.actor,
+                    json.dumps([p.model_dump(mode="json") for p in correction.patches]),
+                    correction.context_summary,
+                    correction.action_title,
+                    correction.created_at.isoformat(),
+                ),
+            )
+            await db.commit()
+
+        await self._log(
+            action_id=correction.action_id,
+            pocket_id=correction.pocket_id,
+            actor=correction.actor,
+            event="correction_captured",
+            description=correction.context_summary,
+            context={
+                "correction_id": correction.id,
+                "patch_count": len(correction.patches),
+                "paths": [p.path for p in correction.patches],
+            },
+        )
+        return correction
+
+    async def get_corrections_for_pocket(
+        self, pocket_id: str, limit: int = 100
+    ) -> list[Correction]:
+        await self._ensure_schema()
+        async with self._conn() as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM instinct_corrections"
+                " WHERE pocket_id = ? ORDER BY created_at DESC LIMIT ?",
+                (pocket_id, limit),
+            ) as cur:
+                return [self._row_to_correction(row) async for row in cur]
+
+    async def get_corrections_for_action(self, action_id: str) -> list[Correction]:
+        await self._ensure_schema()
+        async with self._conn() as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM instinct_corrections WHERE action_id = ? ORDER BY created_at DESC",
+                (action_id,),
+            ) as cur:
+                return [self._row_to_correction(row) async for row in cur]
+
+    async def count_corrections_by_path(self, pocket_id: str, path: str) -> int:
+        """Return how many corrections on this pocket touched a given path.
+
+        Used by the soul bridge to decide when to promote a pattern from
+        episodic to procedural (the 3x-same-path heuristic).
+        """
+        corrections = await self.get_corrections_for_pocket(pocket_id, limit=1000)
+        return sum(1 for c in corrections if any(p.path == path for p in c.patches))
+
     # --- Helpers ---
 
     def _row_to_action(self, row: Any) -> Action:
@@ -407,4 +494,17 @@ class InstinctStore:
             context=json.loads(row["context"]) if row["context"] else {},
             ai_recommendation=row["ai_recommendation"],
             outcome=row["outcome"],
+        )
+
+    def _row_to_correction(self, row: Any) -> Correction:
+        patches_raw = json.loads(row["patches"]) if row["patches"] else []
+        return Correction(
+            id=row["id"],
+            action_id=row["action_id"],
+            pocket_id=row["pocket_id"],
+            actor=row["actor"],
+            patches=[CorrectionPatch.model_validate(p) for p in patches_raw],
+            context_summary=row["context_summary"],
+            action_title=row["action_title"],
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
