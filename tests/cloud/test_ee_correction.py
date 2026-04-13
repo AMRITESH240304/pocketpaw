@@ -129,17 +129,13 @@ class TestSummarizeCorrection:
         assert "Send renewal outreach" in summary
 
     def test_summary_names_each_patched_field_up_to_five(self) -> None:
-        patches = [
-            CorrectionPatch(path=f"parameters.f{i}", before=1, after=2) for i in range(5)
-        ]
+        patches = [CorrectionPatch(path=f"parameters.f{i}", before=1, after=2) for i in range(5)]
         summary = summarize_correction(_action(), patches)
         for i in range(5):
             assert f"parameters.f{i}" in summary
 
     def test_more_than_five_patches_appends_overflow_counter(self) -> None:
-        patches = [
-            CorrectionPatch(path=f"parameters.f{i}", before=1, after=2) for i in range(8)
-        ]
+        patches = [CorrectionPatch(path=f"parameters.f{i}", before=1, after=2) for i in range(8)]
         summary = summarize_correction(_action(), patches)
         assert "(+3 more)" in summary
 
@@ -170,8 +166,7 @@ def correction_for(store: InstinctStore):
             action_id=action_id,
             pocket_id=pocket_id,
             actor=actor,
-            patches=patches
-            or [CorrectionPatch(path="title", before="Old", after="New")],
+            patches=patches or [CorrectionPatch(path="title", before="Old", after="New")],
             context_summary="edited the greeting tone",
             action_title=title,
         )
@@ -233,9 +228,7 @@ class TestCorrectionStore:
         assert corrections[1].action_id == "act-a"
 
     @pytest.mark.asyncio
-    async def test_count_corrections_by_path(
-        self, store: InstinctStore, correction_for
-    ) -> None:
+    async def test_count_corrections_by_path(self, store: InstinctStore, correction_for) -> None:
         await store.record_correction(
             correction_for(
                 action_id="act-1",
