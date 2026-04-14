@@ -18,7 +18,7 @@ from ee.cloud.pockets.schemas import (
 
 def test_create_pocket_defaults():
     req = CreatePocketRequest(name="My Pocket")
-    assert req.visibility == "private" and req.session_id is None
+    assert req.visibility == "workspace" and req.session_id is None
 
 
 def test_create_pocket_with_session():

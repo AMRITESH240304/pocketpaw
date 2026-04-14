@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 class CreateGroupRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = ""
-    type: Literal["public", "private", "dm"] = "public"
+    type: Literal["public", "private", "dm", "channel"] = "private"
     member_ids: list[str] = Field(default_factory=list)
     icon: str = ""
     color: str = ""
@@ -26,10 +26,18 @@ class UpdateGroupRequest(BaseModel):
     description: str | None = None
     icon: str | None = None
     color: str | None = None
+    # Toggle visibility — "private" (members-only) vs "public"/"channel"
+    # (any workspace member can read). DMs cannot be retyped.
+    type: Literal["public", "private", "channel"] | None = None
 
 
 class AddGroupMembersRequest(BaseModel):
     user_ids: list[str]
+    role: Literal["edit", "view"] = "edit"
+
+
+class UpdateMemberRoleRequest(BaseModel):
+    role: Literal["edit", "view"]
 
 
 class AddGroupAgentRequest(BaseModel):

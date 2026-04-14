@@ -16,7 +16,11 @@ from fastapi import APIRouter, Depends
 from ee.cloud.agents.knowledge import _extract_url, _kb
 from ee.cloud.kb.schemas import IngestTextRequest, IngestUrlRequest, LintRequest, SearchRequest
 from ee.cloud.license import require_license
-from ee.cloud.shared.deps import current_user_id, current_workspace_id
+from ee.cloud.shared.deps import (
+    current_user_id,
+    current_workspace_id,
+    require_action_any_workspace,
+)
 from ee.cloud.shared.errors import CloudError, NotFound
 
 logger = logging.getLogger(__name__)
@@ -33,7 +37,7 @@ def _scope(workspace_id: str, override: str | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/search")
+@router.post("/search", dependencies=[Depends(require_action_any_workspace("kb.read"))])
 async def search_kb(
     body: SearchRequest,
     workspace_id: str = Depends(current_workspace_id),
@@ -52,7 +56,7 @@ async def search_kb(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/ingest/text")
+@router.post("/ingest/text", dependencies=[Depends(require_action_any_workspace("kb.write"))])
 async def ingest_text(
     body: IngestTextRequest,
     workspace_id: str = Depends(current_workspace_id),
@@ -67,7 +71,7 @@ async def ingest_text(
         raise CloudError(500, "kb.ingest_failed", str(exc)) from exc
 
 
-@router.post("/ingest/url")
+@router.post("/ingest/url", dependencies=[Depends(require_action_any_workspace("kb.write"))])
 async def ingest_url(
     body: IngestUrlRequest,
     workspace_id: str = Depends(current_workspace_id),
@@ -88,7 +92,7 @@ async def ingest_url(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/lint")
+@router.post("/lint", dependencies=[Depends(require_action_any_workspace("kb.read"))])
 async def lint_kb(
     body: LintRequest,
     workspace_id: str = Depends(current_workspace_id),
@@ -107,7 +111,10 @@ async def lint_kb(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/article/{article_id}")
+@router.get(
+    "/article/{article_id}",
+    dependencies=[Depends(require_action_any_workspace("kb.read"))],
+)
 async def get_article(
     article_id: str,
     workspace_id: str = Depends(current_workspace_id),
@@ -124,7 +131,10 @@ async def get_article(
         raise NotFound("article", article_id)
 
 
-@router.get("/concept/{name}")
+@router.get(
+    "/concept/{name}",
+    dependencies=[Depends(require_action_any_workspace("kb.read"))],
+)
 async def get_concept_articles(
     name: str,
     workspace_id: str = Depends(current_workspace_id),
@@ -143,7 +153,7 @@ async def get_concept_articles(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[Depends(require_action_any_workspace("kb.read"))])
 async def kb_stats(
     workspace_id: str = Depends(current_workspace_id),
     user_id: str = Depends(current_user_id),
@@ -158,7 +168,7 @@ async def kb_stats(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/articles")
+@router.get("/articles", dependencies=[Depends(require_action_any_workspace("kb.read"))])
 async def list_articles(
     workspace_id: str = Depends(current_workspace_id),
     user_id: str = Depends(current_user_id),
@@ -171,7 +181,7 @@ async def list_articles(
     return {"articles": articles, "total": len(articles)}
 
 
-@router.get("/concepts")
+@router.get("/concepts", dependencies=[Depends(require_action_any_workspace("kb.read"))])
 async def list_concepts(
     workspace_id: str = Depends(current_workspace_id),
     user_id: str = Depends(current_user_id),

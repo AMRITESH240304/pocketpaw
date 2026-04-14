@@ -17,7 +17,12 @@ from ee.cloud.pockets.schemas import (
 )
 from ee.cloud.pockets.service import PocketService
 from ee.cloud.sessions.schemas import CreateSessionRequest
-from ee.cloud.shared.deps import current_user_id, current_workspace_id
+from ee.cloud.shared.deps import (
+    current_user_id,
+    current_workspace_id,
+    require_pocket_edit,
+    require_pocket_owner,
+)
 
 router = APIRouter(prefix="/pockets", tags=["Pockets"], dependencies=[Depends(require_license)])
 
@@ -51,7 +56,7 @@ async def get_pocket(
     return await PocketService.get(pocket_id, user_id)
 
 
-@router.patch("/{pocket_id}")
+@router.patch("/{pocket_id}", dependencies=[Depends(require_pocket_edit)])
 async def update_pocket(
     pocket_id: str,
     body: UpdatePocketRequest,
@@ -60,7 +65,7 @@ async def update_pocket(
     return await PocketService.update(pocket_id, user_id, body)
 
 
-@router.delete("/{pocket_id}", status_code=204)
+@router.delete("/{pocket_id}", status_code=204, dependencies=[Depends(require_pocket_owner)])
 async def delete_pocket(
     pocket_id: str,
     user_id: str = Depends(current_user_id),
@@ -166,7 +171,7 @@ async def remove_agent(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{pocket_id}/share")
+@router.post("/{pocket_id}/share", dependencies=[Depends(require_pocket_owner)])
 async def generate_share_link(
     pocket_id: str,
     body: ShareLinkRequest,
@@ -175,7 +180,7 @@ async def generate_share_link(
     return await PocketService.generate_share_link(pocket_id, user_id, body.access)
 
 
-@router.delete("/{pocket_id}/share", status_code=204)
+@router.delete("/{pocket_id}/share", status_code=204, dependencies=[Depends(require_pocket_owner)])
 async def revoke_share_link(
     pocket_id: str,
     user_id: str = Depends(current_user_id),
@@ -184,7 +189,7 @@ async def revoke_share_link(
     return Response(status_code=204)
 
 
-@router.patch("/{pocket_id}/share")
+@router.patch("/{pocket_id}/share", dependencies=[Depends(require_pocket_owner)])
 async def update_share_link_access(
     pocket_id: str,
     body: ShareLinkRequest,
@@ -203,7 +208,11 @@ async def access_via_share_link(token: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{pocket_id}/collaborators", status_code=204)
+@router.post(
+    "/{pocket_id}/collaborators",
+    status_code=204,
+    dependencies=[Depends(require_pocket_owner)],
+)
 async def add_collaborator(
     pocket_id: str,
     body: AddCollaboratorRequest,
@@ -213,7 +222,11 @@ async def add_collaborator(
     return Response(status_code=204)
 
 
-@router.delete("/{pocket_id}/collaborators/{target_user_id}", status_code=204)
+@router.delete(
+    "/{pocket_id}/collaborators/{target_user_id}",
+    status_code=204,
+    dependencies=[Depends(require_pocket_owner)],
+)
 async def remove_collaborator(
     pocket_id: str,
     target_user_id: str,

@@ -12,7 +12,6 @@ from ee.cloud.models.user import User, WorkspaceMembership
 from ee.cloud.models.workspace import Workspace, WorkspaceSettings
 from ee.cloud.shared.errors import ConflictError, Forbidden, NotFound, SeatLimitError
 from ee.cloud.shared.events import event_bus
-from ee.cloud.shared.permissions import check_workspace_role
 from ee.cloud.workspace.schemas import (
     CreateInviteRequest,
     CreateWorkspaceRequest,
@@ -113,10 +112,7 @@ class WorkspaceService:
 
     @staticmethod
     async def update(workspace_id: str, user: User, body: UpdateWorkspaceRequest) -> dict:
-        """Update workspace fields. Requires admin+ role."""
-        membership = _get_membership(user, workspace_id)
-        check_workspace_role(membership.role, minimum="admin")
-
+        """Update workspace fields. Role check performed at route layer."""
         ws = await Workspace.get(PydanticObjectId(workspace_id))
         if not ws or ws.deleted_at is not None:
             raise NotFound("workspace", workspace_id)
@@ -132,10 +128,7 @@ class WorkspaceService:
 
     @staticmethod
     async def delete(workspace_id: str, user: User) -> None:
-        """Soft-delete a workspace. Requires owner role."""
-        membership = _get_membership(user, workspace_id)
-        check_workspace_role(membership.role, minimum="owner")
-
+        """Soft-delete a workspace. Role check performed at route layer."""
         ws = await Workspace.get(PydanticObjectId(workspace_id))
         if not ws or ws.deleted_at is not None:
             raise NotFound("workspace", workspace_id)
@@ -189,10 +182,8 @@ class WorkspaceService:
     async def update_member_role(
         workspace_id: str, target_user_id: str, role: str, user: User
     ) -> None:
-        """Update a member's role. Requires admin+. Cannot demote the workspace owner."""
-        membership = _get_membership(user, workspace_id)
-        check_workspace_role(membership.role, minimum="admin")
-
+        """Update a member's role. Role check at route layer; owner-demotion
+        invariant enforced here because it's a data rule, not a role rule."""
         # Load workspace to check owner
         ws = await Workspace.get(PydanticObjectId(workspace_id))
         if not ws or ws.deleted_at is not None:
@@ -217,10 +208,8 @@ class WorkspaceService:
 
     @staticmethod
     async def remove_member(workspace_id: str, target_user_id: str, user: User) -> None:
-        """Remove a member from a workspace. Requires admin+. Cannot remove owner."""
-        membership = _get_membership(user, workspace_id)
-        check_workspace_role(membership.role, minimum="admin")
-
+        """Remove a member. Role check at route layer; owner-removal invariant
+        enforced here because it's a data rule, not a role rule."""
         # Load workspace to check owner
         ws = await Workspace.get(PydanticObjectId(workspace_id))
         if not ws or ws.deleted_at is not None:
@@ -257,11 +246,22 @@ class WorkspaceService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    async def create_invite(workspace_id: str, user: User, body: CreateInviteRequest) -> dict:
-        """Create an invite. Requires admin+. Checks seat limit and existing pending invites."""
-        membership = _get_membership(user, workspace_id)
-        check_workspace_role(membership.role, minimum="admin")
+    async def list_invites(workspace_id: str) -> list[dict]:
+        """List pending (not accepted, not revoked, not expired) invites for
+        a workspace. Role check at route layer."""
+        invites = await Invite.find(
+            {
+                "workspace": workspace_id,
+                "accepted": False,
+                "revoked": False,
+            }
+        ).to_list()
+        return [_invite_response(inv) for inv in invites if not inv.expired]
 
+    @staticmethod
+    async def create_invite(workspace_id: str, user: User, body: CreateInviteRequest) -> dict:
+        """Create an invite. Role check at route layer; seat-limit + dedup
+        enforced here."""
         ws = await Workspace.get(PydanticObjectId(workspace_id))
         if not ws or ws.deleted_at is not None:
             raise NotFound("workspace", workspace_id)
@@ -364,10 +364,7 @@ class WorkspaceService:
 
     @staticmethod
     async def revoke_invite(workspace_id: str, invite_id: str, user: User) -> None:
-        """Revoke an invite. Requires admin+."""
-        membership = _get_membership(user, workspace_id)
-        check_workspace_role(membership.role, minimum="admin")
-
+        """Revoke an invite. Role check at route layer."""
         invite = await Invite.get(PydanticObjectId(invite_id))
         if not invite or invite.workspace != workspace_id:
             raise NotFound("invite", invite_id)
