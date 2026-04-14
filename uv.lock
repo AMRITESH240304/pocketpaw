@@ -4716,9 +4716,9 @@ requires-dist = [
     { name = "slack-bolt", marker = "extra == 'dev'", specifier = ">=1.20.0" },
     { name = "slack-bolt", marker = "extra == 'slack'", specifier = ">=1.20.0" },
     { name = "slowapi", marker = "extra == 'enterprise'", specifier = ">=0.1.9" },
-    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'all'", specifier = ">=0.2.9" },
-    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'all-tools'", specifier = ">=0.2.9" },
-    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'soul'", specifier = ">=0.2.9" },
+    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'all'", specifier = ">=0.3.0" },
+    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'all-tools'", specifier = ">=0.3.0" },
+    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'soul'", specifier = ">=0.3.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'databases'", specifier = ">=2.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'mysql'", specifier = ">=2.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'postgresql'", specifier = ">=2.0.0" },
@@ -6353,14 +6353,14 @@ wheels = [
 
 [[package]]
 name = "soul-protocol"
-version = "0.2.9"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7d/0a/7b6ea4f8903edad06ad73d2280bee3c1a387821ea90d38186ab9ac5d2d50/soul_protocol-0.2.9.tar.gz", hash = "sha256:7e8a6ec7179694a465fd1cb17f9db6af73a5426d6d3a3bf1e4a33495a687fb37", size = 1232417, upload-time = "2026-03-29T10:43:25.293Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ac/f1/47f519731a8923594710a89375c0afeda69927cafb863b20f21be61b7a9e/soul_protocol-0.3.0.tar.gz", hash = "sha256:cff219cfed2921d0706bc3797e3468eaef67bdf9a9a62696b309c9b7bb579fff", size = 1269118, upload-time = "2026-04-09T14:58:13.589Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/98/13/8ea72d17a23848e04ae46834895d2ee4dd4c59b42cf586fc9da0443d3eed/soul_protocol-0.2.9-py3-none-any.whl", hash = "sha256:82199de3114d5ceb5084e23dc6d253bb48032ba9fc3ced4ea2956fb1abec6e22", size = 266368, upload-time = "2026-03-29T10:43:24.046Z" },
+    { url = "https://files.pythonhosted.org/packages/75/c6/bfadfec28106559b3b121bee89f750900473e260b6269505c454a07cb237/soul_protocol-0.3.0-py3-none-any.whl", hash = "sha256:aacd9a1e91b0b5e894b3b0ca68113eb3806465ade5a7efa57f4af5b159e64d25", size = 283139, upload-time = "2026-04-09T14:58:11.998Z" },
 ]
 
 [package.optional-dependencies]

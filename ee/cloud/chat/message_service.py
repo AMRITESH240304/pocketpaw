@@ -14,6 +14,7 @@ from beanie import PydanticObjectId
 
 from ee.cloud.chat.group_service import (
     _get_group_or_404,
+    _require_can_post,
     _require_group_admin,
     _require_group_member,
 )
@@ -78,7 +79,7 @@ class MessageService:
         the group's last_message_at / message_count.
         """
         group = await _get_group_or_404(group_id)
-        _require_group_member(group, user_id)
+        _require_can_post(group, user_id)
 
         if group.archived:
             raise Forbidden("group.archived", "Cannot send messages to an archived group")
@@ -151,11 +152,16 @@ class MessageService:
 
     @staticmethod
     async def edit_message(message_id: str, user_id: str, body: EditMessageRequest) -> dict:
-        """Edit a message. Author only."""
+        """Edit a message. Author only, and the author must still be able to post."""
         msg = await _get_message_or_404(message_id)
 
         if msg.sender != user_id:
             raise Forbidden("message.not_author", "Only the message author can edit it")
+
+        # Defense-in-depth: if the author's role has been downgraded to view,
+        # block edits even though they authored the message.
+        group = await _get_group_or_404(msg.group)
+        _require_can_post(group, user_id)
 
         msg.content = body.content
         msg.edited = True
@@ -190,6 +196,10 @@ class MessageService:
         left, remove the entire reaction entry.
         """
         msg = await _get_message_or_404(message_id)
+
+        # View-only members cannot react
+        group = await _get_group_or_404(msg.group)
+        _require_can_post(group, user_id)
 
         # Find existing reaction for this emoji
         existing: Reaction | None = None
