@@ -4441,6 +4441,7 @@ enterprise = [
     { name = "python-socketio" },
     { name = "redis", extra = ["hiredis"] },
     { name = "slowapi" },
+    { name = "soul-protocol", extra = ["engine"] },
 ]
 extract = [
     { name = "html2text" },
@@ -4673,6 +4674,7 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.50.0" },
     { name = "playwright", marker = "extra == 'recommended'", specifier = ">=1.50.0" },
     { name = "pocketpaw", extras = ["openai-agents", "google-adk", "copilot-sdk", "deep-agents", "litellm"], marker = "extra == 'all-backends'" },
+    { name = "pocketpaw", extras = ["soul"], marker = "extra == 'enterprise'" },
     { name = "psutil", marker = "extra == 'all'", specifier = ">=5.9.0" },
     { name = "psutil", marker = "extra == 'all-tools'", specifier = ">=5.9.0" },
     { name = "psutil", marker = "extra == 'desktop'", specifier = ">=5.9.0" },

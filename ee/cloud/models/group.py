@@ -27,7 +27,7 @@ class Group(TimestampedDocument):
     description: str = ""
     icon: str = ""
     color: str = ""
-    type: str = Field(default="public", pattern="^(public|private|dm)$")
+    type: str = Field(default="public", pattern="^(public|private|dm|channel)$")
     members: list[str] = Field(default_factory=list)  # User IDs
     agents: list[GroupAgent] = Field(default_factory=list)
     pinned_messages: list[str] = Field(default_factory=list)  # Message IDs

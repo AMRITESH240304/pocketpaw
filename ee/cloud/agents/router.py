@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, UploadFile
+from fastapi import APIRouter, Depends, Query, Request, UploadFile
 from fastapi import File as FastAPIFile
 from starlette.responses import Response
 
@@ -164,6 +164,57 @@ async def search_knowledge(agent_id: str, q: str = Query(..., min_length=1), lim
 
     results = await KnowledgeService.search(agent_id, q, limit)
     return {"results": results}
+
+
+
+# ---------------------------------------------------------------------------
+# Profile Picture Upload
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{agent_id}/profile-pic")
+async def upload_profile_pic(
+    agent_id: str,
+    request: Request,
+    file: UploadFile = FastAPIFile(...),
+    user_id: str = Depends(current_user_id),
+):
+    """Upload a profile picture for an agent."""
+    import uuid
+    from pathlib import Path
+
+    from fastapi import HTTPException
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+
+    # Validate file type
+    allowed = {"image/jpeg", "image/png", "image/webp"}
+    if file.content_type not in allowed:
+        raise HTTPException(status_code=400, detail="Only JPEG, PNG, and WebP images are allowed")
+
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File size must be under 5 MB")
+
+    # Save to ~/.pocketpaw/uploads/avatars/
+    ext = Path(file.filename).suffix.lower() or ".png"
+    upload_dir = Path.home() / ".pocketpaw" / "uploads" / "avatars"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{agent_id}-{uuid.uuid4().hex[:8]}{ext}"
+    dest = upload_dir / filename
+    dest.write_bytes(content)
+
+    # Build full URL using the request's base URL
+    base = str(request.base_url).rstrip("/")
+    avatar_url = f"{base}/uploads/avatars/{filename}"
+
+    # Update the agent's avatar field
+    await AgentService.update(
+        agent_id, user_id, UpdateAgentRequest(avatar=avatar_url)
+    )
+
+    return {"url": avatar_url}
 
 
 @router.post("/{agent_id}/knowledge/upload")

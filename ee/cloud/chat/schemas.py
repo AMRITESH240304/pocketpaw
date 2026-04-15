@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 class CreateGroupRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = ""
-    type: Literal["public", "private", "dm"] = "public"
+    type: Literal["public", "private", "dm", "channel"] = "public"
     member_ids: list[str] = Field(default_factory=list)
     icon: str = ""
     color: str = ""
