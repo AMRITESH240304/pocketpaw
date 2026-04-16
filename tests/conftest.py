@@ -1,12 +1,20 @@
 """Pytest configuration."""
 
 import asyncio
+import os
 import sys
 from unittest.mock import patch
 
 import pytest
 
 from pocketpaw.security.audit import AuditLogger
+
+# Tests run with loopback / RFC1918 URLs in many places (`http://localhost:*`
+# ollama defaults, mock HTTP servers, etc). In production that's the exact
+# SSRF shape blocked by security.url_validators.validate_external_url — here
+# we relax the check so Settings() instantiates cleanly. Tests that need the
+# strict behaviour monkeypatch POCKETPAW_ALLOW_INTERNAL_URLS=false themselves.
+os.environ.setdefault("POCKETPAW_ALLOW_INTERNAL_URLS", "true")
 
 
 @pytest.fixture(scope="session", autouse=True)
