@@ -90,13 +90,36 @@ class TestScrubCommand:
 
 
 class _FakeTool:
-    name = "ingest_key"
-    description = "fake"
-    trust_level = "standard"
+    """Minimal BaseTool subclass — avoids the import cost of all 40+ built-in tools."""
+
+    def __init__(self):
+        from pocketpaw.tools.protocol import BaseTool  # noqa: F401
+
+    @property
+    def name(self):
+        return "ingest_key"
+
+    @property
+    def description(self):
+        return "fake"
+
+    @property
+    def trust_level(self):
+        return "standard"
 
     @property
     def parameters(self):
         return {"type": "object", "properties": {"openai_api_key": {"type": "string"}}}
+
+    @property
+    def definition(self):
+        from pocketpaw.tools.protocol import ToolDefinition
+
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters=self.parameters,
+        )
 
     async def execute(self, **kwargs):
         return "ok"
@@ -116,7 +139,7 @@ async def test_registry_scrubs_params_in_audit(tmp_path):
     with patch("pocketpaw.tools.registry.get_audit_logger", return_value=audit):
         reg = ToolRegistry()
         reg.register(_FakeTool())
-        await reg.execute("ingest_key", {"openai_api_key": "sk-dont-leak-me"})
+        await reg.execute("ingest_key", openai_api_key="sk-dont-leak-me")
 
     raw = log_path.read_text()
     assert "sk-dont-leak-me" not in raw, f"secret leaked into audit log: {raw}"
@@ -164,11 +187,11 @@ def test_scrubbed_event_round_trips_through_json():
 
     ev = {
         "action": "tool_use",
-        "params": {"openai_api_key": "sk-x", "q": "what is love"},
-        "command": "curl -H 'Authorization: Bearer sk-y'",
+        "params": {"openai_api_key": "sk-abcdef0123", "q": "what is love"},
+        "command": "curl -H 'Authorization: Bearer sk-abc123def456xyz'",
     }
     out = scrub_event_dict(ev)
     # Must still serialize cleanly
     roundtrip = json.loads(json.dumps(out))
     assert roundtrip["params"]["openai_api_key"] == "***"
-    assert "sk-y" not in roundtrip["command"]
+    assert "sk-abc123def456xyz" not in roundtrip["command"]
