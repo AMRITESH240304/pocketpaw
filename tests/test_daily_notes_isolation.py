@@ -7,10 +7,19 @@ import pytest
 
 
 @pytest.fixture
-def manager(tmp_path):
-    """Fresh MemoryManager backed by a tmp FileMemoryStore."""
+def manager(tmp_path, monkeypatch):
+    """Fresh MemoryManager backed by a tmp FileMemoryStore.
+
+    Forces a non-default owner_id so _resolve_user_id() gives alice and bob
+    distinct scoped IDs — otherwise both resolve to "default" and the
+    isolation test is a no-op.
+    """
+    from pocketpaw.config import get_settings
     from pocketpaw.memory.file_store import FileMemoryStore
     from pocketpaw.memory.manager import MemoryManager
+
+    s = get_settings()
+    monkeypatch.setattr(s, "owner_id", "owner")
 
     store = FileMemoryStore(tmp_path / "memory")
     return MemoryManager(store)
@@ -20,12 +29,15 @@ class TestDailyNotesIsolation:
     """Daily notes must be scoped to sender_id — user A never sees user B's notes."""
 
     async def test_note_records_sender_id(self, manager):
+        from pocketpaw.memory.protocol import MemoryType
+
+        expected_uid = manager._resolve_user_id("alice")
         note_id = await manager.note("alice's groceries list", sender_id="alice")
-        entries = await manager._store.get_by_type(
-            __import__("pocketpaw.memory.protocol", fromlist=["MemoryType"]).MemoryType.DAILY,
-            limit=100,
-        )
-        assert any(e.id == note_id and e.metadata.get("user_id") == "alice" for e in entries)
+
+        entries = await manager._store.get_by_type(MemoryType.DAILY, limit=100)
+        assert any(
+            e.id == note_id and e.metadata.get("user_id") == expected_uid for e in entries
+        ), "daily note must carry a user_id derived from sender_id"
 
     async def test_context_excludes_other_users_daily_notes(self, manager):
         await manager.note("alice-secret-note", sender_id="alice")
