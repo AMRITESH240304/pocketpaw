@@ -1,12 +1,15 @@
 /**
  * PocketPaw - Analytics and Trace Explorer Feature Module
  *
- * Created: 2026-04-20
+ * Updated: 2026-04-21 — Added budget bar, alert bell, cost-by-tool table,
+ *   channel uptime section and auto-refresh for alert count.
  *
  * Integrates dashboard UI with:
  * - /api/v1/analytics/*
  * - /api/v1/traces
  * - /api/v1/traces/{trace_id}
+ * - /api/v1/budget/status
+ * - /api/v1/alerts
  */
 
 window.PocketPaw = window.PocketPaw || {};
@@ -17,7 +20,7 @@ window.PocketPaw.Analytics = {
     getState() {
         return {
             showAnalyticsModal: false,
-            analyticsTab: 'overview', // overview | traces
+            analyticsTab: 'overview', // overview | traces | budget | alerts
             analyticsPeriod: 'day',   // day | week | month
             analyticsLoading: false,
             analyticsError: '',
@@ -27,6 +30,24 @@ window.PocketPaw.Analytics = {
             analyticsUsage: null,
             analyticsHealth: null,
 
+            // Budget state
+            analyticsBudget: null,
+            analyticsBudgetLoading: false,
+            analyticsBudgetError: '',
+            budgetOverrideCapInput: '',
+            budgetOverrideReasonInput: '',
+            budgetOverrideSaving: false,
+            budgetOverrideError: '',
+            budgetClearError: '',
+
+            // Alerts state
+            analyticsAlerts: [],
+            analyticsAlertsLoading: false,
+            analyticsAlertsError: '',
+            alertUnreadCount: 0,
+            _alertPollTimer: null,
+
+            // Traces
             tracesLoading: false,
             tracesError: '',
             traces: [],
@@ -53,6 +74,7 @@ window.PocketPaw.Analytics = {
                 this.selectedTraceError = '';
                 this.refreshAnalyticsPanel();
                 this._startAnalyticsPoll();
+                this._startAlertPoll();
                 this.$nextTick(() => {
                     if (window.refreshIcons) window.refreshIcons();
                 });
@@ -61,12 +83,20 @@ window.PocketPaw.Analytics = {
             closeAnalyticsPanel() {
                 this.showAnalyticsModal = false;
                 this._stopAnalyticsPoll();
+                this._stopAlertPoll();
             },
 
             setAnalyticsTab(tab) {
                 this.analyticsTab = tab;
                 if (tab === 'traces' && (!Array.isArray(this.traces) || this.traces.length === 0)) {
                     this.refreshTraces();
+                }
+                if (tab === 'budget') {
+                    this.refreshBudget();
+                }
+                if (tab === 'alerts') {
+                    this.refreshAlerts();
+                    this.markAlertsRead();
                 }
             },
 
@@ -77,7 +107,12 @@ window.PocketPaw.Analytics = {
             },
 
             async refreshAnalyticsPanel() {
-                await Promise.all([this.refreshAnalyticsData(), this.refreshTraces()]);
+                await Promise.all([
+                    this.refreshAnalyticsData(),
+                    this.refreshTraces(),
+                    this.refreshBudget(),
+                    this.refreshAlertCount(),
+                ]);
             },
 
             async _fetchAnalyticsJson(url) {
@@ -119,6 +154,160 @@ window.PocketPaw.Analytics = {
                     this.analyticsLoading = false;
                 }
             },
+
+            // ── Budget ─────────────────────────────────────────────────────────
+
+            async refreshBudget() {
+                this.analyticsBudgetLoading = true;
+                this.analyticsBudgetError = '';
+                try {
+                    this.analyticsBudget = await this._fetchAnalyticsJson('/api/v1/budget/status');
+                } catch (err) {
+                    this.analyticsBudgetError = err && err.message ? err.message : 'Failed to load budget';
+                } finally {
+                    this.analyticsBudgetLoading = false;
+                }
+            },
+
+            budgetPercent() {
+                const b = this.analyticsBudget && this.analyticsBudget.budget;
+                if (!b) return 0;
+                const spent = Number(b.spent_usd || 0);
+                const cap = Number(b.effective_cap_usd || this.analyticsBudget.configured_cap_usd || 0);
+                if (!cap || cap <= 0) return 0;
+                return Math.min(Math.round((spent / cap) * 1000) / 10, 100);
+            },
+
+            budgetBarClass() {
+                const pct = this.budgetPercent();
+                if (pct >= 100) return 'bg-danger';
+                if (pct >= 80) return 'bg-warning';
+                return 'bg-accent';
+            },
+
+            budgetSpent() {
+                const b = this.analyticsBudget && this.analyticsBudget.budget;
+                return b ? Number(b.spent_usd || 0) : 0;
+            },
+
+            budgetCap() {
+                if (!this.analyticsBudget) return 0;
+                const b = this.analyticsBudget.budget;
+                const cfg = Number(this.analyticsBudget.configured_cap_usd || 0);
+                if (!b) return cfg;
+                return Number(b.effective_cap_usd || cfg || 0);
+            },
+
+            async setBudgetOverride() {
+                const cap = Number(this.budgetOverrideCapInput);
+                if (!cap || cap <= 0) {
+                    this.budgetOverrideError = 'cap_usd must be > 0';
+                    return;
+                }
+                this.budgetOverrideSaving = true;
+                this.budgetOverrideError = '';
+                try {
+                    const resp = await fetch('/api/v1/budget/override', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            cap_usd: cap,
+                            reason: this.budgetOverrideReasonInput.trim(),
+                        }),
+                    });
+                    if (!resp.ok) {
+                        let detail = `Request failed (${resp.status})`;
+                        try {
+                            const body = await resp.json();
+                            if (body && body.detail) detail = String(body.detail);
+                        } catch (_) {}
+                        throw new Error(detail);
+                    }
+                    this.budgetOverrideCapInput = '';
+                    this.budgetOverrideReasonInput = '';
+                    await this.refreshBudget();
+                } catch (err) {
+                    this.budgetOverrideError = err && err.message ? err.message : 'Failed to set override';
+                } finally {
+                    this.budgetOverrideSaving = false;
+                }
+            },
+
+            async clearBudgetOverride() {
+                this.budgetClearError = '';
+                try {
+                    const resp = await fetch('/api/v1/budget/override', { method: 'DELETE' });
+                    if (!resp.ok) {
+                        let detail = `Request failed (${resp.status})`;
+                        try {
+                            const body = await resp.json();
+                            if (body && body.detail) detail = String(body.detail);
+                        } catch (_) {}
+                        this.budgetClearError = detail;
+                        return;
+                    }
+                    await this.refreshBudget();
+                } catch (err) {
+                    this.budgetClearError = err && err.message ? err.message : 'Failed to clear override';
+                }
+            },
+
+            // ── Alerts ─────────────────────────────────────────────────────────
+
+            async refreshAlerts() {
+                this.analyticsAlertsLoading = true;
+                this.analyticsAlertsError = '';
+                try {
+                    const data = await this._fetchAnalyticsJson('/api/v1/alerts?limit=100');
+                    this.analyticsAlerts = Array.isArray(data.alerts) ? data.alerts : [];
+                    this.alertUnreadCount = Number(data.unread_count || 0);
+                } catch (err) {
+                    this.analyticsAlertsError = err && err.message ? err.message : 'Failed to load alerts';
+                } finally {
+                    this.analyticsAlertsLoading = false;
+                }
+            },
+
+            async refreshAlertCount() {
+                try {
+                    const data = await this._fetchAnalyticsJson('/api/v1/alerts?limit=1');
+                    this.alertUnreadCount = Number(data.unread_count || 0);
+                } catch (_) {}
+            },
+
+            async markAlertsRead() {
+                try {
+                    await fetch('/api/v1/alerts/mark-read', { method: 'POST' });
+                    this.alertUnreadCount = 0;
+                } catch (_) {}
+            },
+
+            alertSeverityClass(severity) {
+                const s = String(severity || '').toLowerCase();
+                if (s === 'critical') return 'bg-danger/20 text-danger border border-danger/30';
+                if (s === 'warning') return 'bg-warning/20 text-warning border border-warning/30';
+                return 'bg-white/10 text-white/60 border border-white/15';
+            },
+
+            _startAlertPoll() {
+                this._stopAlertPoll();
+                this._alertPollTimer = setInterval(() => {
+                    if (!this.showAnalyticsModal) {
+                        this._stopAlertPoll();
+                        return;
+                    }
+                    this.refreshAlertCount();
+                }, 30000);
+            },
+
+            _stopAlertPoll() {
+                if (this._alertPollTimer) {
+                    clearInterval(this._alertPollTimer);
+                    this._alertPollTimer = null;
+                }
+            },
+
+            // ── Traces ─────────────────────────────────────────────────────────
 
             async refreshTraces() {
                 this.tracesLoading = true;
@@ -196,6 +385,10 @@ window.PocketPaw.Analytics = {
                     if (this.analyticsTab === 'traces') {
                         this.refreshTraces();
                     }
+                    if (this.analyticsTab === 'budget') {
+                        this.refreshBudget();
+                    }
+                    this.refreshAlertCount();
                 }, 30000);
             },
 
@@ -205,6 +398,8 @@ window.PocketPaw.Analytics = {
                     this._analyticsPollTimer = null;
                 }
             },
+
+            // ── View helpers ───────────────────────────────────────────────────
 
             analyticsCostTotals() {
                 return (this.analyticsCost && this.analyticsCost.totals) || {};
@@ -225,6 +420,20 @@ window.PocketPaw.Analytics = {
                 return rows.slice(0, limit);
             },
 
+            analyticsTopTools(limit = 8) {
+                const rows = this.analyticsPerformance && Array.isArray(this.analyticsPerformance.tool_performance)
+                    ? this.analyticsPerformance.tool_performance
+                    : [];
+                return rows.slice(0, limit);
+            },
+
+            analyticsTopToolsByCost(limit = 8) {
+                const rows = this.analyticsCost && Array.isArray(this.analyticsCost.by_tool)
+                    ? this.analyticsCost.by_tool
+                    : [];
+                return rows.slice(0, limit);
+            },
+
             analyticsTopChannels(limit = 6) {
                 const rows = this.analyticsUsage && Array.isArray(this.analyticsUsage.messages_by_channel)
                     ? this.analyticsUsage.messages_by_channel
@@ -232,11 +441,11 @@ window.PocketPaw.Analytics = {
                 return rows.slice(0, limit);
             },
 
-            analyticsTopTools(limit = 8) {
-                const rows = this.analyticsPerformance && Array.isArray(this.analyticsPerformance.tool_performance)
-                    ? this.analyticsPerformance.tool_performance
-                    : [];
-                return rows.slice(0, limit);
+            analyticsChannelUptime() {
+                const health = this.analyticsHealth;
+                if (!health || !health.channel_health) return [];
+                const uptime = health.channel_health.uptime;
+                return Array.isArray(uptime) ? uptime : Object.values(uptime || {});
             },
 
             analyticsFmtCurrency(value) {

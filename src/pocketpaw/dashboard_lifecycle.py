@@ -215,6 +215,29 @@ async def startup_event(
             logger.info("Trace retention cleanup removed %d file(s)", removed)
     except Exception:
         logger.debug("Trace retention cleanup failed", exc_info=True)
+
+    # Start AlertManager (periodic threshold checks + bus subscriptions)
+    try:
+        from pocketpaw.alert_manager import get_alert_manager
+
+        alert_manager = get_alert_manager()
+        await alert_manager.start()
+        _register_lifecycle("alert_manager", shutdown=alert_manager.stop)
+        logger.info("AlertManager started")
+    except Exception as e:
+        logger.warning("Failed to start AlertManager: %s", e)
+
+    # Start ChannelHealthStore (connects/disconnects uptime tracking)
+    try:
+        from pocketpaw.channel_health_store import get_channel_health_store
+
+        channel_health_store = get_channel_health_store()
+        await channel_health_store.subscribe()
+        _register_lifecycle("channel_health_store", shutdown=channel_health_store.unsubscribe)
+        logger.info("ChannelHealthStore subscribed")
+    except Exception as e:
+        logger.warning("Failed to subscribe ChannelHealthStore: %s", e)
+
     if _start_channel_adapter_fn:
         for ch in (
             "discord",

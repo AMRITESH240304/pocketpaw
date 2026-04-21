@@ -3,6 +3,13 @@
 #
 # Stores per-request usage records as append-only JSONL in ~/.pocketpaw/usage.jsonl.
 # Provides aggregation helpers for the /api/v1/metrics/usage endpoint.
+#
+# Budget enforcement:
+#   record() performs a cumulative-spend check against the configured cap
+#   before writing to disk.  When budget_auto_pause is True and the cap is
+#   exhausted, it raises BudgetExhaustedError.  The AgentLoop preflight
+#   catches this before routing to the LLM, but the check here ensures
+#   enforcement even in code paths that call record() directly.
 
 from __future__ import annotations
 
@@ -98,6 +105,10 @@ class UsageSummary:
     by_backend: dict = field(default_factory=dict)
 
 
+class BudgetExhaustedError(RuntimeError):
+    """Raised by UsageTracker.record() when the monthly budget cap is hit."""
+
+
 class UsageTracker:
     """Append-only usage tracker with JSONL persistence."""
 
@@ -145,6 +156,52 @@ class UsageTracker:
             cost_usd=cost,
             session_id=session_id,
         )
+
+        # Budget enforcement at record() level — checked before persisting.
+        # Lazy-import to avoid circular imports at module load time.
+        #
+        # Fail-safe behaviour for unknown / unpriced models:
+        #   • If cost is None (model not in pricing table and no authoritative
+        #     total_cost_usd was provided), we cannot include the call's own
+        #     spend in the check.  We still block if spent_usd alone has
+        #     already reached the cap so that a series of unpriced calls
+        #     cannot silently exhaust the budget.
+        #   • We always log a warning when cost is unknown so operators know
+        #     to add the model to the pricing table.
+        if cost is None:
+            logger.warning(
+                "Unknown model pricing for '%s' — cost estimate unavailable. "
+                "Budget enforcement will use spent_usd only.",
+                model,
+            )
+        try:
+            from pocketpaw.config import get_settings
+
+            settings = get_settings()
+            auto_pause = bool(getattr(settings, "budget_auto_pause", True))
+            cap_usd = float(getattr(settings, "budget_monthly_usd", 0.0) or 0.0)
+            if auto_pause and cap_usd > 0.0:
+                from pocketpaw.budget import get_budget_snapshot
+
+                snap = get_budget_snapshot(settings, tracker=self)
+                # Use the known record cost when available; fall back to 0
+                # so that unknown-cost calls are still blocked once the
+                # window spend alone has reached the cap.
+                record_cost = cost if cost is not None else 0.0
+                if snap.spent_usd + record_cost >= cap_usd - 1e-9:
+                    logger.warning(
+                        "Budget cap exhausted (%.4f + %.4f / %.4f) — record() blocked",
+                        snap.spent_usd,
+                        record_cost,
+                        cap_usd,
+                    )
+                    raise BudgetExhaustedError(
+                        f"Monthly budget cap ${cap_usd:.4f} reached (spent ${snap.spent_usd:.4f})"
+                    )
+        except BudgetExhaustedError:
+            raise
+        except Exception:
+            pass  # Never block record() due to a config/budget error
 
         try:
             with self._lock:

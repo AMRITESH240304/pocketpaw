@@ -634,6 +634,14 @@ class Settings(BaseSettings):
         le=28,
         description="Day of month when the budget window resets (1-28)",
     )
+    per_agent_caps: dict[str, float] = Field(
+        default_factory=dict,
+        description=(
+            "Per-agent monthly budget caps in USD. Keys are agent backend names "
+            "(e.g. 'claude_agent_sdk', 'openai_agents'). "
+            "0 or missing = inherit global cap. Example: {'claude_agent_sdk': 5.0}"
+        ),
+    )
     budget_paused: bool = Field(
         default=False,
         description="Internal flag set when budget exhaustion auto-pauses the agent",

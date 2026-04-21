@@ -67,6 +67,23 @@
                     :class="analyticsTab === 'traces' ? 'bg-white/15 text-white' : 'text-white/45 hover:text-white/75 hover:bg-white/10'"
                     @click="setAnalyticsTab('traces')"
                 >Traces</button>
+                <button
+                    class="px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors"
+                    :class="analyticsTab === 'budget' ? 'bg-white/15 text-white' : 'text-white/45 hover:text-white/75 hover:bg-white/10'"
+                    @click="setAnalyticsTab('budget')"
+                >Budget</button>
+                <button
+                    class="relative px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors"
+                    :class="analyticsTab === 'alerts' ? 'bg-white/15 text-white' : 'text-white/45 hover:text-white/75 hover:bg-white/10'"
+                    @click="setAnalyticsTab('alerts')"
+                >
+                    Alerts
+                    <span
+                        x-show="alertUnreadCount > 0"
+                        class="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-danger text-white text-[9px] font-bold flex items-center justify-center"
+                        x-text="alertUnreadCount > 99 ? '99+' : alertUnreadCount"
+                    ></span>
+                </button>
             </div>
         </div>
 
@@ -205,6 +222,164 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Cost by Tool -->
+                    <div class="rounded-xl border border-white/10 bg-black/25 p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="text-[13px] font-semibold text-white/90">Cost by Tool</h3>
+                            <span class="text-[10px] text-white/35">Proportional duration share</span>
+                        </div>
+                        <div x-show="analyticsTopToolsByCost().length === 0" class="text-[12px] text-white/35 py-4">No tool cost data in this period.</div>
+                        <div class="space-y-1.5" x-show="analyticsTopToolsByCost().length > 0">
+                            <template x-for="row in analyticsTopToolsByCost()" :key="row.name">
+                                <div class="flex items-center justify-between p-2 rounded-lg bg-white/5 border border-white/6">
+                                    <div class="text-[12px] text-white/80 truncate" x-text="row.name"></div>
+                                    <div class="flex items-center gap-3 shrink-0">
+                                        <span class="text-[11px] text-white/40" x-text="analyticsFmtNumber(row.count) + ' calls'"></span>
+                                        <span class="text-[12px] font-semibold text-accent" x-text="analyticsFmtCurrency(row.cost_usd)"></span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- Channel Uptime -->
+                    <div class="rounded-xl border border-white/10 bg-black/25 p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="text-[13px] font-semibold text-white/90">Channel Uptime (7 days)</h3>
+                        </div>
+                        <div x-show="analyticsChannelUptime().length === 0" class="text-[12px] text-white/35 py-4">No channel uptime data yet.</div>
+                        <div class="space-y-2" x-show="analyticsChannelUptime().length > 0">
+                            <template x-for="ch in analyticsChannelUptime()" :key="ch.channel">
+                                <div class="p-2.5 rounded-lg bg-white/5 border border-white/6">
+                                    <div class="flex items-center justify-between gap-2 mb-1">
+                                        <span class="text-[12px] font-medium text-white/85" x-text="ch.channel"></span>
+                                        <span class="text-[12px] font-semibold" :class="ch.uptime_percent >= 99 ? 'text-success' : ch.uptime_percent >= 90 ? 'text-warning' : 'text-danger'" x-text="ch.uptime_percent + '%'"></span>
+                                    </div>
+                                    <div class="w-full bg-white/10 rounded-full h-1.5">
+                                        <div class="h-1.5 rounded-full transition-all" :class="ch.uptime_percent >= 99 ? 'bg-success' : ch.uptime_percent >= 90 ? 'bg-warning' : 'bg-danger'" :style="'width:' + Math.min(ch.uptime_percent, 100) + '%'"></div>
+                                    </div>
+                                    <div class="mt-1 text-[11px]" :class="ch.currently_connected ? 'text-success' : 'text-white/35'" x-text="ch.currently_connected ? '● Connected' : '○ Disconnected'"></div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==================== Budget ==================== -->
+            <div x-show="analyticsTab === 'budget'" class="space-y-4">
+                <div x-show="analyticsBudgetLoading" class="flex items-center justify-center py-12 text-white/50">
+                    <i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i>
+                </div>
+                <div x-show="analyticsBudgetError" class="px-3 py-2 rounded-xl bg-danger/10 border border-danger/30 text-danger text-[12px]" x-text="analyticsBudgetError"></div>
+
+                <div x-show="!analyticsBudgetLoading && analyticsBudget" class="space-y-4">
+                    <!-- Budget gauge -->
+                    <div class="rounded-xl border border-white/10 bg-black/25 p-5">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-[14px] font-semibold">Monthly Budget</h3>
+                            <span class="text-[11px] px-2 py-0.5 rounded-full"
+                                :class="budgetPercent() >= 100 ? 'bg-danger/20 text-danger border border-danger/30' : budgetPercent() >= 80 ? 'bg-warning/20 text-warning border border-warning/30' : 'bg-success/20 text-success border border-success/30'"
+                                x-text="budgetPercent() >= 100 ? 'EXHAUSTED' : budgetPercent() >= 80 ? 'WARNING' : 'OK'">
+                            </span>
+                        </div>
+                        <div class="flex items-end justify-between mb-2 text-[12px]">
+                            <span class="text-white/50">Spent</span>
+                            <span class="font-semibold text-[18px]" x-text="analyticsFmtCurrency(budgetSpent())"></span>
+                        </div>
+                        <div class="w-full bg-white/10 rounded-full h-3 mb-2">
+                            <div class="h-3 rounded-full transition-all duration-500"
+                                :class="budgetBarClass()"
+                                :style="'width:' + budgetPercent() + '%'"></div>
+                        </div>
+                        <div class="flex items-center justify-between text-[11px] text-white/40">
+                            <span>$0</span>
+                            <span x-text="budgetPercent().toFixed(1) + '% of cap'"></span>
+                            <span x-text="analyticsFmtCurrency(budgetCap())"></span>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3 mt-4">
+                            <div class="p-3 rounded-lg bg-white/5 border border-white/6">
+                                <div class="text-[10px] uppercase tracking-wide text-white/40">Reset Day</div>
+                                <div class="text-[14px] font-semibold mt-1" x-text="'Day ' + (analyticsBudget && analyticsBudget.reset_day || 1)"></div>
+                            </div>
+                            <div class="p-3 rounded-lg bg-white/5 border border-white/6">
+                                <div class="text-[10px] uppercase tracking-wide text-white/40">Auto-Pause</div>
+                                <div class="text-[14px] font-semibold mt-1" x-text="analyticsBudget && analyticsBudget.auto_pause ? 'Enabled' : 'Disabled'"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Active Override -->
+                    <div class="rounded-xl border border-white/10 bg-black/25 p-4" x-show="analyticsBudget && analyticsBudget.override && analyticsBudget.override.cap_usd">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="text-[13px] font-semibold text-warning">Active Override</h3>
+                            <button class="text-[11px] text-danger hover:text-red-300 transition-colors" @click="clearBudgetOverride()">Clear</button>
+                        </div>
+                        <div x-show="budgetClearError" class="mb-2 text-[11px] text-danger" x-text="budgetClearError"></div>
+                        <div class="text-[12px] text-white/70" x-text="'Cap: ' + analyticsFmtCurrency(analyticsBudget && analyticsBudget.override && analyticsBudget.override.cap_usd)"></div>
+                        <div class="text-[11px] text-white/40 mt-1" x-text="analyticsBudget && analyticsBudget.override && analyticsBudget.override.reason"></div>
+                        <div class="text-[11px] text-white/35 mt-1" x-text="'Expires: ' + analyticsFmtWhen(analyticsBudget && analyticsBudget.override && analyticsBudget.override.expires_at)"></div>
+                    </div>
+
+                    <!-- Set Override -->
+                    <div class="rounded-xl border border-white/10 bg-black/25 p-4">
+                        <h3 class="text-[13px] font-semibold mb-3">Set Temporary Override</h3>
+                        <div x-show="budgetOverrideError" class="mb-2 text-[11px] text-danger" x-text="budgetOverrideError"></div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                                <label class="text-[10px] uppercase tracking-wide text-white/40">Cap USD</label>
+                                <input type="number" min="0.01" step="0.01" x-model="budgetOverrideCapInput"
+                                    class="mt-1 w-full px-3 py-2 bg-black/35 border border-white/10 rounded-lg text-[12px] text-white placeholder-white/30 focus:outline-none focus:border-accent/40"
+                                    placeholder="e.g. 25.00" />
+                            </div>
+                            <div>
+                                <label class="text-[10px] uppercase tracking-wide text-white/40">Reason</label>
+                                <input type="text" x-model="budgetOverrideReasonInput"
+                                    class="mt-1 w-full px-3 py-2 bg-black/35 border border-white/10 rounded-lg text-[12px] text-white placeholder-white/30 focus:outline-none focus:border-accent/40"
+                                    placeholder="Optional reason" />
+                            </div>
+                        </div>
+                        <button class="mt-3 px-4 py-1.5 text-[12px] font-medium bg-accent/20 text-accent hover:bg-accent/30 rounded-lg transition-colors"
+                            :disabled="budgetOverrideSaving"
+                            @click="setBudgetOverride()">
+                            <span x-show="!budgetOverrideSaving">Apply Override</span>
+                            <span x-show="budgetOverrideSaving">Saving…</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==================== Alerts ==================== -->
+            <div x-show="analyticsTab === 'alerts'" class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <span class="text-[12px] text-white/40" x-text="analyticsAlerts.length + ' alerts'"></span>
+                    <div class="flex items-center gap-2">
+                        <button class="px-3 py-1.5 text-[11px] font-medium bg-accent/20 text-accent hover:bg-accent/30 rounded-lg transition-colors" @click="refreshAlerts()">Refresh</button>
+                        <button class="px-3 py-1.5 text-[11px] font-medium text-white/55 hover:text-white hover:bg-white/10 rounded-lg transition-colors" @click="markAlertsRead()">Mark all read</button>
+                    </div>
+                </div>
+
+                <div x-show="analyticsAlertsLoading" class="flex items-center justify-center py-12 text-white/50">
+                    <i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i>
+                </div>
+                <div x-show="analyticsAlertsError" class="px-3 py-2 rounded-xl bg-danger/10 border border-danger/30 text-danger text-[12px]" x-text="analyticsAlertsError"></div>
+                <div x-show="!analyticsAlertsLoading && analyticsAlerts.length === 0" class="text-center py-10 text-white/40 text-[13px]">No alerts.</div>
+
+                <div x-show="!analyticsAlertsLoading && analyticsAlerts.length > 0" class="space-y-2">
+                    <template x-for="alert in analyticsAlerts" :key="alert.timestamp + alert.alert_type">
+                        <div class="p-3 rounded-xl border" :class="alertSeverityClass(alert.severity)">
+                            <div class="flex items-start justify-between gap-2">
+                                <div class="min-w-0">
+                                    <div class="text-[12px] font-semibold uppercase tracking-wide" x-text="alert.alert_type"></div>
+                                    <div class="text-[12px] mt-1 text-white/80" x-text="alert.message"></div>
+                                </div>
+                                <span class="text-[10px] shrink-0 px-1.5 py-0.5 rounded-full border" :class="alertSeverityClass(alert.severity)" x-text="(alert.severity || 'info').toUpperCase()"></span>
+                            </div>
+                            <div class="text-[11px] text-white/35 mt-1.5" x-text="analyticsFmtWhen(alert.timestamp)"></div>
+                        </div>
+                    </template>
                 </div>
             </div>
 

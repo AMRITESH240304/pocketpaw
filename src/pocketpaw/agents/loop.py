@@ -950,6 +950,19 @@ class AgentLoop:
 
             # 2c. Emit agent_start + thinking events
             agent_started = True
+            # Resolve the active model name for trace fidelity.  The router may
+            # not be initialised yet if this is the very first message; fall back
+            # to the configured model setting so the trace always has a value.
+            _active_model = ""
+            try:
+                _active_model = str(
+                    getattr(self._router._backend if self._router else None, "model", "")
+                    or getattr(self.settings, "anthropic_model", "")
+                    or getattr(self.settings, "openai_model", "")
+                    or ""
+                )
+            except Exception:
+                pass
             await self.bus.publish_system(
                 SystemEvent(
                     event_type="agent_start",
@@ -957,6 +970,7 @@ class AgentLoop:
                         "session_key": session_key,
                         "trace_id": trace_id,
                         "backend": self.settings.agent_backend,
+                        "model": _active_model,
                     },
                 )
             )

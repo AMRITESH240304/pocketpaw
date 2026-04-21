@@ -1,8 +1,14 @@
-"""Analytics aggregation helpers for cost, performance, usage, and health."""
+"""Analytics aggregation helpers for cost, performance, usage, and health.
+
+All blocking file I/O (usage_tracker reads, trace file reads) is delegated to
+asyncio.to_thread() to comply with the project's async I/O guideline.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import calendar
+import json
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -91,16 +97,63 @@ def _as_iso(dt: datetime) -> str:
     return dt.astimezone(UTC).isoformat()
 
 
+# ---------------------------------------------------------------------------
+# Helpers that wrap blocking calls in to_thread
+# ---------------------------------------------------------------------------
+
+
+async def _get_usage_summary(since: str) -> dict[str, Any]:
+    """Fetch usage summary without blocking the event loop."""
+    tracker = get_usage_tracker()
+    return await asyncio.to_thread(tracker.get_summary, since)
+
+
+async def _get_usage_records(limit: int = 20000) -> list[Any]:
+    """Fetch usage records without blocking the event loop."""
+    tracker = get_usage_tracker()
+    return await asyncio.to_thread(tracker.get_records, limit)
+
+
+async def _measure_memory_dir() -> int:
+    """Measure memory dir size without blocking the event loop."""
+
+    def _measure() -> int:
+        memory_dir = get_config_dir() / "memory"
+        size = 0
+        if memory_dir.exists():
+            for path in memory_dir.rglob("*"):
+                if path.is_file():
+                    try:
+                        size += path.stat().st_size
+                    except OSError:
+                        pass
+        return size
+
+    return await asyncio.to_thread(_measure)
+
+
+# ---------------------------------------------------------------------------
+# Cost analytics
+# ---------------------------------------------------------------------------
+
+
 async def get_cost_analytics(period: str) -> dict[str, Any]:
     start, end = _period_window(period)
     since = _as_iso(start)
 
-    usage_summary = get_usage_tracker().get_summary(since=since)
-    traces = await get_trace_store().get_full_traces(since=since, limit=10000)
+    usage_summary, traces = await asyncio.gather(
+        _get_usage_summary(since),
+        get_trace_store().get_full_traces(since=since, limit=10000),
+    )
 
     channel_totals: dict[str, dict[str, float]] = defaultdict(lambda: {"cost_usd": 0.0, "count": 0})
-    daily_cost = Counter()
-    daily_requests = Counter()
+    daily_cost: Counter = Counter()
+    daily_requests: Counter = Counter()
+    # Per-tool cost attribution — estimated by splitting trace cost evenly
+    # across tool calls, weighted by tool duration share.
+    tool_cost_totals: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"cost_usd": 0.0, "count": 0}
+    )
 
     for trace in traces:
         inbound = trace.get("inbound") if isinstance(trace.get("inbound"), dict) else {}
@@ -114,6 +167,24 @@ async def get_cost_analytics(period: str) -> dict[str, Any]:
         if day_key:
             daily_cost[day_key] += cost
             daily_requests[day_key] += 1
+
+        # Attribute cost by tool — split trace cost proportionally by duration
+        tool_calls = _trace_tool_calls(trace)
+        if tool_calls and cost > 0:
+            total_tool_duration = sum(float(tc.get("duration_ms") or 0.0) for tc in tool_calls)
+            for tc in tool_calls:
+                name = str(tc.get("name") or "unknown")
+                tc_duration = float(tc.get("duration_ms") or 0.0)
+                if total_tool_duration > 0:
+                    tc_cost = cost * (tc_duration / total_tool_duration)
+                else:
+                    tc_cost = cost / len(tool_calls)
+                tool_cost_totals[name]["cost_usd"] += tc_cost
+                tool_cost_totals[name]["count"] += 1
+        elif tool_calls:
+            for tc in tool_calls:
+                name = str(tc.get("name") or "unknown")
+                tool_cost_totals[name]["count"] += 1
 
     total_cost = float(usage_summary.get("total_cost_usd") or 0.0)
     elapsed_hours = max((end - start).total_seconds() / 3600.0, 1 / 3600.0)
@@ -169,8 +240,26 @@ async def get_cost_analytics(period: str) -> dict[str, Any]:
                 reverse=True,
             )
         ],
+        # Cost by tool — amounts are proportional estimates based on duration share
+        "by_tool": [
+            {
+                "name": name,
+                "cost_usd": round(float(values["cost_usd"]), 6),
+                "count": int(values["count"]),
+            }
+            for name, values in sorted(
+                tool_cost_totals.items(),
+                key=lambda item: item[1]["cost_usd"],
+                reverse=True,
+            )
+        ],
         "daily_trend": trend,
     }
+
+
+# ---------------------------------------------------------------------------
+# Performance analytics
+# ---------------------------------------------------------------------------
 
 
 async def get_performance_analytics(period: str) -> dict[str, Any]:
@@ -268,18 +357,25 @@ async def get_performance_analytics(period: str) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Usage analytics
+# ---------------------------------------------------------------------------
+
+
 async def get_usage_analytics(period: str) -> dict[str, Any]:
     start, end = _period_window(period)
     since = _as_iso(start)
 
-    traces = await get_trace_store().get_full_traces(since=since, limit=10000)
-    usage_records = get_usage_tracker().get_records(limit=20000)
+    traces, usage_records = await asyncio.gather(
+        get_trace_store().get_full_traces(since=since, limit=10000),
+        _get_usage_records(limit=20000),
+    )
 
-    messages_per_day = Counter()
-    messages_by_channel = Counter()
+    messages_per_day: Counter = Counter()
+    messages_by_channel: Counter = Counter()
     active_sessions_by_day: dict[str, set[str]] = defaultdict(set)
-    peak_hours = Counter()
-    tool_counts = Counter()
+    peak_hours: Counter = Counter()
+    tool_counts: Counter = Counter()
 
     for trace in traces:
         started_at = _trace_started_at(trace)
@@ -358,10 +454,65 @@ async def get_usage_analytics(period: str) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Health analytics
+# ---------------------------------------------------------------------------
+
+
+def _read_guardian_block_rate_sync(since: datetime) -> float:
+    """Read guardian block rate from the audit JSONL log.
+
+    Counts entries where actor=``guardian`` and status=``block`` (or
+    ``local_safety_check`` + status=``block``) within the given time window,
+    divided by the total number of guardian scan_result / local_safety_check
+    entries in the same window.  Returns 0.0 on any error.
+    """
+    try:
+        from pathlib import Path
+
+        audit_path = Path.home() / ".pocketpaw" / "audit.jsonl"
+        if not audit_path.exists():
+            return 0.0
+
+        blocks = 0
+        total_checks = 0
+        with audit_path.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("actor") or "") != "guardian":
+                    continue
+                action = str(entry.get("action") or "")
+                # Only count decision events (not pending scan_command entries)
+                if action not in ("scan_result", "local_safety_check", "scan_error"):
+                    continue
+                ts = _parse_iso(str(entry.get("timestamp") or ""))
+                if ts is None or ts < since:
+                    continue
+                total_checks += 1
+                if str(entry.get("status") or "") == "block":
+                    blocks += 1
+
+        return round(blocks / max(total_checks, 1), 4)
+    except Exception:
+        return 0.0
+
+
 async def get_health_analytics() -> dict[str, Any]:
     now = datetime.now(tz=UTC)
     day_start = now - timedelta(days=1)
-    traces = await get_trace_store().get_full_traces(since=_as_iso(day_start), limit=10000)
+
+    traces, memory_size_bytes = await asyncio.gather(
+        get_trace_store().get_full_traces(since=_as_iso(day_start), limit=10000),
+        _measure_memory_dir(),
+    )
 
     engine = get_health_engine()
     summary = engine.summary
@@ -379,7 +530,6 @@ async def get_health_analytics() -> dict[str, Any]:
             recent_1h += 1
 
     error_traces = 0
-    guardian_block_events = 0
     total_tool_calls = 0
     for trace in traces:
         total = _trace_total(trace)
@@ -387,16 +537,17 @@ async def get_health_analytics() -> dict[str, Any]:
         trace_errors = trace.get("errors") if isinstance(trace.get("errors"), list) else []
         if status != "ok" or trace_errors:
             error_traces += 1
-        for err in trace_errors:
-            message = str((err or {}).get("message") or "").lower()
-            if "blocked" in message:
-                guardian_block_events += 1
         total_tool_calls += len(_trace_tool_calls(trace))
 
     error_rate_24h = error_traces / max(len(traces), 1)
-    guardian_block_rate = guardian_block_events / max(total_tool_calls, 1)
 
-    sessions_by_channel = Counter()
+    # Guardian block rate — read directly from the audit log
+    # (actor="guardian", status="block") over the last 24 h window.
+    # This is the only reliable source; inferring from trace error strings
+    # misses blocks logged via the local safety check or error paths.
+    guardian_block_rate = await asyncio.to_thread(_read_guardian_block_rate_sync, day_start)
+
+    sessions_by_channel: Counter = Counter()
     active_sessions = 0
     try:
         from pocketpaw.dashboard_state import status_tracker
@@ -409,12 +560,17 @@ async def get_health_analytics() -> dict[str, Any]:
     except Exception:
         pass
 
-    memory_dir = get_config_dir() / "memory"
-    memory_size_bytes = 0
-    if memory_dir.exists():
-        for path in memory_dir.rglob("*"):
-            if path.is_file():
-                memory_size_bytes += path.stat().st_size
+    # Channel uptime timeline from ChannelHealthStore
+    channel_uptime: dict[str, Any] = {}
+    channel_timeline: list[dict[str, Any]] = []
+    try:
+        from pocketpaw.channel_health_store import get_channel_health_store
+
+        chs = get_channel_health_store()
+        channel_uptime = chs.get_uptime_stats()
+        channel_timeline = chs.get_timeline(limit=50)
+    except Exception:
+        pass
 
     return {
         "status": summary.get("status", "unknown"),
@@ -434,6 +590,10 @@ async def get_health_analytics() -> dict[str, Any]:
                 {"channel": channel, "count": int(count)}
                 for channel, count in sessions_by_channel.most_common()
             ],
+            # Per-channel uptime stats (7-day window)
+            "uptime": list(channel_uptime.values()),
+            # Recent connect/disconnect timeline (newest first)
+            "timeline": channel_timeline,
         },
         "memory_store_size_bytes": memory_size_bytes,
     }
