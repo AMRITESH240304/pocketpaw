@@ -10,6 +10,14 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from pocketpaw.ee.guards.abac import evaluate_policy
+from pocketpaw.ee.guards.actions import (
+    ActionRule,
+    GroupRole,
+    check_action,
+    check_group_role,
+    get_rule,
+)
+from pocketpaw.ee.guards.audit import log_denial
 from pocketpaw.ee.guards.policy import PolicyContext
 from pocketpaw.ee.guards.rbac import (
     Forbidden,
@@ -134,4 +142,137 @@ def require_policy(action: str) -> _GuardDep:
         if not result.allowed:
             raise HTTPException(status_code=403, detail=result.code)
 
+    return _guard
+
+
+# ---------------------------------------------------------------------------
+# User-model-backed helpers (for cloud routes using fastapi-users)
+# ---------------------------------------------------------------------------
+#
+# The request.state-based guards above assume a middleware populates
+# `request.state.workspace_membership`. Cloud routes authenticate via
+# fastapi-users and carry the full User document with an embedded
+# `workspaces: list[WorkspaceMembership]`. These helpers read that directly.
+#
+# To avoid importing `ee.cloud.*` (layering), helpers accept any object
+# satisfying a duck-typed Protocol: `.workspaces` iterable of items with
+# `.workspace: str` and `.role: str`.
+
+
+class _HasWorkspaces:
+    """Structural protocol — any object with a `workspaces` list of
+    membership objects exposing `.workspace` and `.role` attributes."""
+
+    workspaces: list[Any]
+
+
+def resolve_workspace_role(user: Any, workspace_id: str) -> WorkspaceRole:
+    """Return the user's WorkspaceRole for `workspace_id`. Raises Forbidden
+    with code `workspace.not_member` if the user has no membership."""
+    for m in getattr(user, "workspaces", []) or []:
+        if getattr(m, "workspace", None) == workspace_id:
+            return WorkspaceRole.from_str(getattr(m, "role", "member") or "member")
+    raise Forbidden(
+        code="workspace.not_member",
+        detail=f"User is not a member of workspace {workspace_id}",
+    )
+
+
+def check_workspace_action(user: Any, workspace_id: str, action: str) -> WorkspaceRole:
+    """Enforce an ACTIONS entry against a user's workspace role.
+
+    Returns the resolved role on success. Raises Forbidden on deny and
+    audits the denial. Use inside route handlers when the route needs the
+    role value, otherwise prefer the factory deps below.
+    """
+    try:
+        role = resolve_workspace_role(user, workspace_id)
+        check_action(action, role)
+    except Forbidden as exc:
+        log_denial(
+            actor=str(getattr(user, "id", "") or ""),
+            action=action,
+            code=exc.code,
+            workspace_id=workspace_id,
+            detail=exc.detail,
+        )
+        raise
+    return role
+
+
+def resolve_group_role(
+    group: Any,
+    user_id: str,
+) -> GroupRole:
+    """Derive a user's GroupRole from a Group document.
+
+    - `group.owner == user_id`  → OWNER
+    - `group.member_roles[user_id]` lookup (values: "admin"|"edit"|"view")
+    - User in `group.members` with no explicit role → MEMBER (edit)
+    - Otherwise → raises Forbidden `group.not_member`
+    """
+    if getattr(group, "owner", None) == user_id:
+        return GroupRole.OWNER
+    member_roles: dict[str, str] = getattr(group, "member_roles", {}) or {}
+    if user_id in member_roles:
+        return GroupRole.from_str(member_roles[user_id])
+    members: list[str] = getattr(group, "members", []) or []
+    if user_id in members:
+        return GroupRole.MEMBER
+    raise Forbidden(code="group.not_member", detail=f"User {user_id} not in group")
+
+
+def check_group_action(group: Any, user_id: str, action: str) -> GroupRole:
+    """Enforce a group-scoped ACTIONS entry. Returns resolved GroupRole."""
+    try:
+        role = resolve_group_role(group, user_id)
+        rule: ActionRule = get_rule(action)
+        # group.* actions may be keyed on GroupRole or WorkspaceRole
+        # (e.g. group.create uses WorkspaceRole.MEMBER). Only enforce
+        # group-role actions here; workspace-role actions on groups are
+        # enforced via check_workspace_action upstream.
+        if isinstance(rule.minimum, GroupRole):
+            check_group_role(role, minimum=rule.minimum, deny_code=rule.deny_code)
+    except Forbidden as exc:
+        log_denial(
+            actor=user_id,
+            action=action,
+            code=exc.code,
+            resource_id=str(getattr(group, "id", "") or ""),
+            detail=exc.detail,
+        )
+        raise
+    return role
+
+
+def make_require_action(
+    action: str,
+    user_dep: Callable[..., Any],
+    workspace_dep: Callable[..., Any],
+) -> Callable[..., Coroutine[Any, Any, Any]]:
+    """Build a FastAPI dependency enforcing `action` using the cloud's
+    `current_active_user` + `current_workspace_id` dependencies.
+
+    The cloud layer wires this up in `ee/cloud/shared/deps.py`:
+
+        require_workspace_update = make_require_action(
+            "workspace.update", current_active_user, current_workspace_id,
+        )
+        @router.patch(..., dependencies=[Depends(require_workspace_update)])
+
+    Kept as a factory so the guards package stays decoupled from cloud auth.
+    """
+    from fastapi import Depends  # local import to keep top-level light
+
+    async def _guard(
+        user: Any = Depends(user_dep),
+        workspace_id: str = Depends(workspace_dep),
+    ) -> Any:
+        try:
+            check_workspace_action(user, workspace_id, action)
+        except Forbidden as exc:
+            raise HTTPException(status_code=403, detail=exc.code) from exc
+        return user
+
+    _guard.__name__ = f"require_action_{action.replace('.', '_')}"
     return _guard

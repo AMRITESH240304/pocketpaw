@@ -54,6 +54,14 @@ def _pocket_response(pocket: Pocket) -> dict:
 def _check_owner(pocket: Pocket, user_id: str) -> None:
     """Raise Forbidden if user is not the pocket owner."""
     if pocket.owner != user_id:
+        from pocketpaw.ee.guards.audit import log_denial
+
+        log_denial(
+            actor=user_id,
+            action="pocket.share",
+            code="pocket.not_owner",
+            resource_id=str(pocket.id),
+        )
         raise Forbidden("pocket.not_owner", "Only the pocket owner can perform this action")
 
 
@@ -65,6 +73,14 @@ def _check_edit_access(pocket: Pocket, user_id: str) -> None:
         return
     if pocket.visibility == "workspace":
         return
+    from pocketpaw.ee.guards.audit import log_denial
+
+    log_denial(
+        actor=user_id,
+        action="pocket.edit",
+        code="pocket.access_denied",
+        resource_id=str(pocket.id),
+    )
     raise Forbidden("pocket.access_denied", "You do not have edit access to this pocket")
 
 

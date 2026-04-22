@@ -225,6 +225,42 @@ class AgentPool:
         logger.info("AgentPool: built instance for %s (%s)", agent_doc.name, settings.agent_backend)
         return instance
 
+    async def ensure_soul(self, agent_doc: Any) -> bool:
+        """Eagerly create and persist a soul for an agent, without building a backend.
+
+        Writes ``~/.pocketpaw/souls/{workspace}/{slug}.soul`` so the soul exists
+        on disk immediately after agent creation, instead of being lazily
+        materialized on first chat.
+
+        Returns True on success, False if soul is disabled or initialization failed.
+        """
+        from pocketpaw.config import Settings
+
+        config = agent_doc.config
+        if not getattr(config, "soul_enabled", True):
+            return False
+
+        try:
+            manager = await self._init_soul(agent_doc, Settings.load())
+        except Exception:
+            logger.warning(
+                "Failed to eagerly init soul for agent %s",
+                agent_doc.id,
+                exc_info=True,
+            )
+            return False
+
+        try:
+            await manager.shutdown()  # persists to disk
+        except Exception:
+            logger.warning(
+                "Failed to persist eagerly-created soul for agent %s",
+                agent_doc.id,
+                exc_info=True,
+            )
+            return False
+        return True
+
     async def _init_soul(self, agent_doc: Any, settings: Any) -> SoulManager:
         """Initialize a SoulManager for an agent."""
         from pocketpaw.config import get_config_dir

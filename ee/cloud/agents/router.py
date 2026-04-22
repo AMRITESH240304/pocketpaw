@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, UploadFile
+from fastapi import APIRouter, Depends, Query, Request, UploadFile
 from fastapi import File as FastAPIFile
 from starlette.responses import Response
 
@@ -13,7 +13,12 @@ from ee.cloud.agents.schemas import (
 )
 from ee.cloud.agents.service import AgentService
 from ee.cloud.license import require_license
-from ee.cloud.shared.deps import current_user_id, current_workspace_id
+from ee.cloud.shared.deps import (
+    current_user_id,
+    current_workspace_id,
+    require_action_any_workspace,
+    require_agent_owner_or_admin,
+)
 
 router = APIRouter(prefix="/agents", tags=["Agents"], dependencies=[Depends(require_license)])
 
@@ -48,7 +53,7 @@ async def list_available_backends():
 # ---------------------------------------------------------------------------
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_action_any_workspace("agent.create"))])
 async def create_agent(
     body: CreateAgentRequest,
     workspace_id: str = Depends(current_workspace_id),
@@ -78,7 +83,7 @@ async def get_by_slug(
     return await AgentService.get_by_slug(workspace_id, slug)
 
 
-@router.patch("/{agent_id}")
+@router.patch("/{agent_id}", dependencies=[Depends(require_agent_owner_or_admin)])
 async def update_agent(
     agent_id: str,
     body: UpdateAgentRequest,
@@ -87,7 +92,7 @@ async def update_agent(
     return await AgentService.update(agent_id, user_id, body)
 
 
-@router.delete("/{agent_id}", status_code=204)
+@router.delete("/{agent_id}", status_code=204, dependencies=[Depends(require_agent_owner_or_admin)])
 async def delete_agent(
     agent_id: str,
     user_id: str = Depends(current_user_id),
@@ -164,6 +169,54 @@ async def search_knowledge(agent_id: str, q: str = Query(..., min_length=1), lim
 
     results = await KnowledgeService.search(agent_id, q, limit)
     return {"results": results}
+
+
+# ---------------------------------------------------------------------------
+# Profile Picture Upload
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{agent_id}/profile-pic")
+async def upload_profile_pic(
+    agent_id: str,
+    request: Request,
+    file: UploadFile = FastAPIFile(...),
+    user_id: str = Depends(current_user_id),
+):
+    """Upload a profile picture for an agent."""
+    import uuid
+    from pathlib import Path
+
+    from fastapi import HTTPException
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+
+    # Validate file type
+    allowed = {"image/jpeg", "image/png", "image/webp"}
+    if file.content_type not in allowed:
+        raise HTTPException(status_code=400, detail="Only JPEG, PNG, and WebP images are allowed")
+
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File size must be under 5 MB")
+
+    # Save to ~/.pocketpaw/uploads/avatars/
+    ext = Path(file.filename).suffix.lower() or ".png"
+    upload_dir = Path.home() / ".pocketpaw" / "uploads" / "avatars"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{agent_id}-{uuid.uuid4().hex[:8]}{ext}"
+    dest = upload_dir / filename
+    dest.write_bytes(content)
+
+    # Build full URL using the request's base URL
+    base = str(request.base_url).rstrip("/")
+    avatar_url = f"{base}/uploads/avatars/{filename}"
+
+    # Update the agent's avatar field
+    await AgentService.update(agent_id, user_id, UpdateAgentRequest(avatar=avatar_url))
+
+    return {"url": avatar_url}
 
 
 @router.post("/{agent_id}/knowledge/upload")
