@@ -61,7 +61,8 @@ def _as_utc(value: datetime) -> datetime:
 
 def _is_mock_placeholder(value: object) -> bool:
     """Detect unittest.mock auto-generated attribute placeholders."""
-    return value.__class__.__module__.startswith("unittest.mock")
+    module = getattr(value.__class__, "__module__", "") or ""
+    return module.startswith("unittest.mock")
 
 
 def _get_setting(settings: Settings, name: str, default: object) -> object:

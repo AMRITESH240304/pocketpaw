@@ -137,17 +137,14 @@ window.PocketPaw.Analytics = {
 
                 try {
                     const period = encodeURIComponent(this.analyticsPeriod || 'day');
-                    const [cost, performance, usage, health] = await Promise.all([
-                        this._fetchAnalyticsJson(`/api/v1/analytics/cost?period=${period}`),
-                        this._fetchAnalyticsJson(`/api/v1/analytics/performance?period=${period}`),
-                        this._fetchAnalyticsJson(`/api/v1/analytics/usage?period=${period}`),
-                        this._fetchAnalyticsJson('/api/v1/analytics/health'),
-                    ]);
+                    // Single request — backend fetches traces once and passes the
+                    // result to all four sub-functions (eliminates 4x parallel scans).
+                    const all = await this._fetchAnalyticsJson(`/api/v1/analytics?period=${period}`);
 
-                    this.analyticsCost = cost;
-                    this.analyticsPerformance = performance;
-                    this.analyticsUsage = usage;
-                    this.analyticsHealth = health;
+                    this.analyticsCost = all.cost;
+                    this.analyticsPerformance = all.performance;
+                    this.analyticsUsage = all.usage;
+                    this.analyticsHealth = all.health;
                 } catch (err) {
                     this.analyticsError = err && err.message ? err.message : 'Failed to load analytics';
                 } finally {

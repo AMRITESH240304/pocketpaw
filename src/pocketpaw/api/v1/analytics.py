@@ -1,11 +1,11 @@
 # Analytics API router — aggregated cost/performance/usage/health views.
-# Created: 2026-04-20
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from pocketpaw.analytics import (
+    get_all_analytics,
     get_cost_analytics,
     get_health_analytics,
     get_performance_analytics,
@@ -53,3 +53,18 @@ async def analytics_usage(
 async def analytics_health():
     """Return operational health analytics derived from health + traces."""
     return await get_health_analytics()
+
+
+@router.get("/analytics", dependencies=[Depends(require_scope("metrics", "admin"))])
+async def analytics_all(
+    period: str = Query("day", pattern="^(day|week|month)$"),
+):
+    """Return all four analytics views in one pass (single trace scan).
+
+    Preferred endpoint for dashboard full-refresh — use individual endpoints
+    only when you need a specific view.
+    """
+    try:
+        return await get_all_analytics(period)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

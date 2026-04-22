@@ -1,7 +1,8 @@
 # Trace API router — list and inspect request traces.
-# Created: 2026-04-20
 
 from __future__ import annotations
+
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -9,6 +10,19 @@ from pocketpaw.api.deps import require_scope
 from pocketpaw.traces import get_trace_store
 
 router = APIRouter(tags=["Traces"])
+
+# Characters that could form path-traversal sequences inside a session_id value.
+_UNSAFE_SESSION_RE = re.compile(r"[/\\]|\.\.")
+
+
+def _sanitize_session_id(value: str) -> str:
+    """Reject session_id values that look like path-traversal attempts."""
+    if value and _UNSAFE_SESSION_RE.search(value):
+        raise HTTPException(
+            status_code=400,
+            detail="session_id contains invalid characters",
+        )
+    return value
 
 
 @router.get("/traces", dependencies=[Depends(require_scope("metrics", "admin"))])
@@ -23,7 +37,7 @@ async def list_traces(
     return await store.list_traces(
         since=since or None,
         limit=limit,
-        session_id=session_id,
+        session_id=_sanitize_session_id(session_id),
         min_cost=min_cost,
     )
 

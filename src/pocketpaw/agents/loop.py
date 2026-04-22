@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 from pocketpaw import usage_tracker as usage_tracker_module
 from pocketpaw.agents.router import AgentRouter
 from pocketpaw.bootstrap import AgentContextBuilder
-from pocketpaw.budget import BudgetSnapshot, sync_budget_state
+from pocketpaw.budget import BudgetSnapshot, get_budget_snapshot
 from pocketpaw.bus import InboundMessage, OutboundMessage, SystemEvent, get_message_bus
 from pocketpaw.bus.commands import get_command_handler
 from pocketpaw.bus.events import Channel
@@ -806,19 +806,20 @@ class AgentLoop:
                     content = pii_result.sanitized_text
 
             # Budget pre-flight: block new model calls if this budget window is exhausted.
+            # Uses the cached settings (get_settings()) to avoid per-message disk I/O and
+            # races with the API layer's _budget_lock.  Persistence of budget_paused is
+            # handled exclusively by the budget API endpoints under _budget_lock.
             try:
                 if usage_tracker is None:
                     usage_tracker = usage_tracker_module.get_usage_tracker()
 
-                budget_settings = Settings.load()
-                budget_snapshot, budget_changed = sync_budget_state(
-                    budget_settings,
+                # Read-only snapshot — no setattr, no save(), no lock needed.
+                # sync_budget_state() mutates settings (pause flag, override expiry)
+                # without _budget_lock; that must only happen in the API layer.
+                budget_snapshot = get_budget_snapshot(
+                    get_settings(),
                     tracker=usage_tracker,
                 )
-                if budget_changed:
-                    budget_settings.save()
-                    get_settings.cache_clear()
-                    self.settings = budget_settings
 
                 level_changed = self._set_budget_level(
                     budget_snapshot.window_key,
@@ -1133,15 +1134,14 @@ class AgentLoop:
                             )
                         else:
                             try:
-                                budget_settings = Settings.load()
-                                budget_snapshot, budget_changed = sync_budget_state(
-                                    budget_settings,
+                                # Read-only snapshot — no setattr, no save(), no lock needed.
+                                # sync_budget_state() mutates settings (budget_paused, override
+                                # expiry) and must only run under _budget_lock in the API layer.
+                                # This path only needs the level to emit warning/exhausted events.
+                                budget_snapshot = get_budget_snapshot(
+                                    get_settings(),
                                     tracker=usage_tracker,
                                 )
-                                if budget_changed:
-                                    budget_settings.save()
-                                    get_settings.cache_clear()
-                                    self.settings = budget_settings
 
                                 level_changed = self._set_budget_level(
                                     budget_snapshot.window_key,
@@ -1477,6 +1477,19 @@ class AgentLoop:
                 reason="exception",
                 error_message=str(e),
             )
+
+        finally:
+            # Guard: if the task was cancelled before _emit_trace_end ran
+            # (CancelledError is not caught by except Exception), close the
+            # trace here so TraceCollector._active never leaks.
+            if not trace_closed:
+                try:
+                    await _emit_trace_end(
+                        status="cancelled",
+                        reason="task_cancelled",
+                    )
+                except Exception:
+                    pass
 
     async def _send_response(self, original: InboundMessage, content: str) -> None:
         """Helper to send a simple text response."""

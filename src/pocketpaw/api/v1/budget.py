@@ -1,5 +1,4 @@
 # Budget status and override endpoints.
-# Created: 2026-04-20
 
 from __future__ import annotations
 

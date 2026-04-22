@@ -28,11 +28,10 @@ class TestBudgetEnforcementUnknownModel:
 
         return UsageTracker(tmp_path / "usage.jsonl")
 
-    def test_known_model_zero_cost_still_blocks_when_cap_exhausted(self, tmp_path: Path) -> None:
-        """A call with total_cost_usd=0.0 must be blocked when
-        spent_usd alone is already at the cap."""
-        from pocketpaw.usage_tracker import BudgetExhaustedError
-
+    def test_known_model_zero_cost_does_not_block_in_record(self, tmp_path: Path) -> None:
+        """record() no longer raises BudgetExhaustedError — enforcement lives
+        in the async AgentLoop preflight.  A zero-cost known-model call must
+        succeed and return a record with cost_usd == 0.0."""
         tracker = self._make_tracker(tmp_path)
 
         mock_settings = MagicMock()
@@ -40,25 +39,25 @@ class TestBudgetEnforcementUnknownModel:
         mock_settings.budget_monthly_usd = 0.01
 
         mock_snap = MagicMock()
-        mock_snap.spent_usd = 0.01  # already at the cap
+        mock_snap.spent_usd = 0.01
 
         with (
             patch("pocketpaw.config.get_settings", return_value=mock_settings),
             patch("pocketpaw.budget.get_budget_snapshot", return_value=mock_snap),
         ):
-            with pytest.raises(BudgetExhaustedError):
-                tracker.record(
-                    backend="test",
-                    model="claude-3-5-haiku-20241022",
-                    input_tokens=0,
-                    output_tokens=0,
-                    total_cost_usd=0.0,
-                )
+            # Must NOT raise — enforcement is the loop's responsibility.
+            record = tracker.record(
+                backend="test",
+                model="claude-3-5-haiku-20241022",
+                input_tokens=0,
+                output_tokens=0,
+                total_cost_usd=0.0,
+            )
+        assert record.cost_usd == 0.0
 
-    def test_unknown_model_blocked_when_window_at_cap(self, tmp_path: Path) -> None:
-        """An unknown model (None cost) must be blocked when spent_usd >= cap."""
-        from pocketpaw.usage_tracker import BudgetExhaustedError
-
+    def test_unknown_model_does_not_block_in_record(self, tmp_path: Path) -> None:
+        """An unknown model (None cost) must NOT be blocked by record() —
+        enforcement is the async preflight's job. record() only logs a warning."""
         tracker = self._make_tracker(tmp_path)
 
         mock_settings = MagicMock()
@@ -66,20 +65,19 @@ class TestBudgetEnforcementUnknownModel:
         mock_settings.budget_monthly_usd = 0.01
 
         mock_snap = MagicMock()
-        mock_snap.spent_usd = 0.01  # at the cap
+        mock_snap.spent_usd = 0.01
 
         with (
             patch("pocketpaw.config.get_settings", return_value=mock_settings),
             patch("pocketpaw.budget.get_budget_snapshot", return_value=mock_snap),
         ):
-            with pytest.raises(BudgetExhaustedError):
-                tracker.record(
-                    backend="test",
-                    model="some-new-unknown-model-xyz",  # not in pricing table
-                    input_tokens=1000,
-                    output_tokens=500,
-                    # no total_cost_usd → _estimate_cost returns None
-                )
+            record = tracker.record(
+                backend="test",
+                model="some-new-unknown-model-xyz",
+                input_tokens=1000,
+                output_tokens=500,
+            )
+        assert record.cost_usd is None
 
     def test_unknown_model_passes_when_under_cap(self, tmp_path: Path) -> None:
         """An unknown model must NOT be blocked when the window is under cap."""

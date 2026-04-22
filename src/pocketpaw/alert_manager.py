@@ -89,7 +89,10 @@ class AlertStore:
                 ts = _parse_iso(str(alert.get("timestamp") or ""))
                 if ts and ts < since_dt:
                     continue
-            results.append(alert)
+            # Return a copy without the internal _unread flag so the API
+            # serialization layer never exposes implementation details.
+            public = {k: v for k, v in alert.items() if k != "_unread"}
+            results.append(public)
             if len(results) >= limit:
                 break
         return results

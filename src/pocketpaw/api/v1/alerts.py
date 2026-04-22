@@ -1,5 +1,4 @@
 # Alert API router — list and acknowledge alerts.
-# Created: 2026-04-21
 
 from __future__ import annotations
 

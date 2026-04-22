@@ -101,6 +101,10 @@ def _as_iso(dt: datetime) -> str:
 # Helpers that wrap blocking calls in to_thread
 # ---------------------------------------------------------------------------
 
+# Maximum traces loaded per analytics pass.  Keep low to bound memory use;
+# traces are ordered most-recent-first so recent data is always included.
+_TRACE_SCAN_LIMIT = 5000
+
 
 async def _get_usage_summary(since: str) -> dict[str, Any]:
     """Fetch usage summary without blocking the event loop."""
@@ -112,6 +116,11 @@ async def _get_usage_records(limit: int = 20000) -> list[Any]:
     """Fetch usage records without blocking the event loop."""
     tracker = get_usage_tracker()
     return await asyncio.to_thread(tracker.get_records, limit)
+
+
+async def _get_traces(since: str, limit: int = _TRACE_SCAN_LIMIT) -> list[Any]:
+    """Fetch full traces once; callers share the result to avoid duplicate scans."""
+    return await get_trace_store().get_full_traces(since=since, limit=limit)
 
 
 async def _measure_memory_dir() -> int:
@@ -137,14 +146,21 @@ async def _measure_memory_dir() -> int:
 # ---------------------------------------------------------------------------
 
 
-async def get_cost_analytics(period: str) -> dict[str, Any]:
+async def get_cost_analytics(
+    period: str,
+    traces: list[Any] | None = None,
+) -> dict[str, Any]:
     start, end = _period_window(period)
     since = _as_iso(start)
 
-    usage_summary, traces = await asyncio.gather(
-        _get_usage_summary(since),
-        get_trace_store().get_full_traces(since=since, limit=10000),
-    )
+    if traces is not None:
+        _traces = traces
+        usage_summary = await _get_usage_summary(since)
+    else:
+        usage_summary, _traces = await asyncio.gather(
+            _get_usage_summary(since),
+            _get_traces(since),
+        )
 
     channel_totals: dict[str, dict[str, float]] = defaultdict(lambda: {"cost_usd": 0.0, "count": 0})
     daily_cost: Counter = Counter()
@@ -155,7 +171,7 @@ async def get_cost_analytics(period: str) -> dict[str, Any]:
         lambda: {"cost_usd": 0.0, "count": 0}
     )
 
-    for trace in traces:
+    for trace in _traces:
         inbound = trace.get("inbound") if isinstance(trace.get("inbound"), dict) else {}
         channel = str(inbound.get("channel") or "unknown")
         cost = _trace_cost(trace)
@@ -262,12 +278,15 @@ async def get_cost_analytics(period: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def get_performance_analytics(period: str) -> dict[str, Any]:
+async def get_performance_analytics(
+    period: str,
+    traces: list[Any] | None = None,
+) -> dict[str, Any]:
     start, end = _period_window(period)
-    traces = await get_trace_store().get_full_traces(since=_as_iso(start), limit=10000)
+    _traces = traces if traces is not None else await _get_traces(_as_iso(start))
 
-    durations = [_trace_duration_ms(trace) for trace in traces if _trace_duration_ms(trace) > 0]
-    llm_calls_per_response = [len(_trace_llm_calls(trace)) for trace in traces]
+    durations = [_trace_duration_ms(trace) for trace in _traces if _trace_duration_ms(trace) > 0]
+    llm_calls_per_response = [len(_trace_llm_calls(trace)) for trace in _traces]
 
     cached_input_tokens = 0
     total_input_tokens = 0
@@ -276,7 +295,7 @@ async def get_performance_analytics(period: str) -> dict[str, Any]:
         lambda: {"count": 0, "failures": 0, "durations": []}
     )
 
-    for trace in traces:
+    for trace in _traces:
         agent_start = trace.get("agent_start") if isinstance(trace.get("agent_start"), dict) else {}
         backend = str((agent_start or {}).get("backend") or "unknown")
         duration = _trace_duration_ms(trace)
@@ -362,14 +381,21 @@ async def get_performance_analytics(period: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def get_usage_analytics(period: str) -> dict[str, Any]:
+async def get_usage_analytics(
+    period: str,
+    traces: list[Any] | None = None,
+) -> dict[str, Any]:
     start, end = _period_window(period)
     since = _as_iso(start)
 
-    traces, usage_records = await asyncio.gather(
-        get_trace_store().get_full_traces(since=since, limit=10000),
-        _get_usage_records(limit=20000),
-    )
+    if traces is not None:
+        _traces = traces
+        usage_records = await _get_usage_records(limit=20000)
+    else:
+        _traces, usage_records = await asyncio.gather(
+            _get_traces(since),
+            _get_usage_records(limit=20000),
+        )
 
     messages_per_day: Counter = Counter()
     messages_by_channel: Counter = Counter()
@@ -377,7 +403,7 @@ async def get_usage_analytics(period: str) -> dict[str, Any]:
     peak_hours: Counter = Counter()
     tool_counts: Counter = Counter()
 
-    for trace in traces:
+    for trace in _traces:
         started_at = _trace_started_at(trace)
         day_key = started_at[:10] if started_at else ""
         hour_key = started_at[11:13] if len(started_at) >= 13 else ""
@@ -462,11 +488,12 @@ async def get_usage_analytics(period: str) -> dict[str, Any]:
 def _read_guardian_block_rate_sync(since: datetime) -> float:
     """Read guardian block rate from the audit JSONL log.
 
-    Counts entries where actor=``guardian`` and status=``block`` (or
-    ``local_safety_check`` + status=``block``) within the given time window,
-    divided by the total number of guardian scan_result / local_safety_check
-    entries in the same window.  Returns 0.0 on any error.
+    Scans from the *tail* of the file (up to _AUDIT_TAIL_BYTES) so the read
+    is bounded regardless of how large audit.jsonl grows.  Counts
+    actor=``guardian`` decision events within the time window.
+    Returns 0.0 on any error.
     """
+    _AUDIT_TAIL_BYTES = 512 * 1024  # 512 KB — enough for ~24 h at typical rates
     try:
         from pathlib import Path
 
@@ -474,11 +501,17 @@ def _read_guardian_block_rate_sync(since: datetime) -> float:
         if not audit_path.exists():
             return 0.0
 
+        file_size = audit_path.stat().st_size
+        seek_pos = max(0, file_size - _AUDIT_TAIL_BYTES)
+
         blocks = 0
         total_checks = 0
-        with audit_path.open(encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
+        with audit_path.open("rb") as fh:
+            fh.seek(seek_pos)
+            if seek_pos > 0:
+                fh.readline()  # skip possible partial first line
+            for raw in fh:
+                line = raw.decode("utf-8", errors="replace").strip()
                 if not line:
                     continue
                 try:
@@ -505,14 +538,20 @@ def _read_guardian_block_rate_sync(since: datetime) -> float:
         return 0.0
 
 
-async def get_health_analytics() -> dict[str, Any]:
+async def get_health_analytics(
+    traces: list[Any] | None = None,
+) -> dict[str, Any]:
     now = datetime.now(tz=UTC)
     day_start = now - timedelta(days=1)
 
-    traces, memory_size_bytes = await asyncio.gather(
-        get_trace_store().get_full_traces(since=_as_iso(day_start), limit=10000),
-        _measure_memory_dir(),
-    )
+    if traces is not None:
+        _traces = traces
+        memory_size_bytes = await _measure_memory_dir()
+    else:
+        _traces, memory_size_bytes = await asyncio.gather(
+            _get_traces(_as_iso(day_start)),
+            _measure_memory_dir(),
+        )
 
     engine = get_health_engine()
     summary = engine.summary
@@ -531,7 +570,7 @@ async def get_health_analytics() -> dict[str, Any]:
 
     error_traces = 0
     total_tool_calls = 0
-    for trace in traces:
+    for trace in _traces:
         total = _trace_total(trace)
         status = str(total.get("status") or "ok")
         trace_errors = trace.get("errors") if isinstance(trace.get("errors"), list) else []
@@ -539,7 +578,7 @@ async def get_health_analytics() -> dict[str, Any]:
             error_traces += 1
         total_tool_calls += len(_trace_tool_calls(trace))
 
-    error_rate_24h = error_traces / max(len(traces), 1)
+    error_rate_24h = error_traces / max(len(_traces), 1)
 
     # Guardian block rate — read directly from the audit log
     # (actor="guardian", status="block") over the last 24 h window.
@@ -596,4 +635,50 @@ async def get_health_analytics() -> dict[str, Any]:
             "timeline": channel_timeline,
         },
         "memory_store_size_bytes": memory_size_bytes,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Combined aggregator — single trace scan for dashboard full-refresh
+# ---------------------------------------------------------------------------
+
+
+async def get_all_analytics(period: str = "day") -> dict[str, Any]:
+    """Fetch all four analytics views in one pass.
+
+    Loads the trace file exactly once and passes the result to each
+    sub-function, eliminating the 4x concurrent unbounded trace scans
+    that happen when the frontend fires Promise.all every 30 s.
+    """
+    start, _ = _period_window(period)
+    since = _as_iso(start)
+    # Health always uses a 24-hour window regardless of period.
+    health_start = _as_iso(datetime.now(tz=UTC) - timedelta(days=1))
+    # Use the wider window for the shared trace fetch.
+    fetch_since = since if since < health_start else health_start
+
+    shared_traces, usage_summary, usage_records, memory_size_bytes = await asyncio.gather(
+        _get_traces(fetch_since),
+        _get_usage_summary(since),
+        _get_usage_records(limit=20000),
+        _measure_memory_dir(),
+    )
+
+    # Partition traces into period-window and 24-h-health-window slices.
+    health_traces = [t for t in shared_traces if (_trace_started_at(t) or "") >= health_start]
+    period_traces = [t for t in shared_traces if (_trace_started_at(t) or "") >= since]
+
+    cost, performance, usage, health = await asyncio.gather(
+        get_cost_analytics(period, traces=period_traces),
+        get_performance_analytics(period, traces=period_traces),
+        get_usage_analytics(period, traces=period_traces),
+        get_health_analytics(traces=health_traces),
+    )
+    # Inject the already-fetched usage_summary / usage_records so sub-functions
+    # don't re-fetch.  They already used them when traces were pre-supplied.
+    return {
+        "cost": cost,
+        "performance": performance,
+        "usage": usage,
+        "health": health,
     }

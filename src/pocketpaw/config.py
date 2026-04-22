@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field
+from pydantic import AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from pocketpaw.security.url_validators import validate_external_url
@@ -154,7 +155,12 @@ def validate_api_keys(settings: Settings) -> list[str]:
 class Settings(BaseSettings):
     """PocketPaw settings with env and file support."""
 
-    model_config = SettingsConfigDict(env_prefix="POCKETPAW_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="POCKETPAW_",
+        env_file=".env",
+        extra="ignore",
+        populate_by_name=True,  # allow field-name assignment alongside aliases
+    )
 
     # Telegram
     telegram_bot_token: str | None = Field(
@@ -654,7 +660,12 @@ class Settings(BaseSettings):
     )
     budget_paused: bool = Field(
         default=False,
-        description="Internal flag set when budget exhaustion auto-pauses the agent",
+        exclude=True,  # excluded from JSON serialization
+        # validation_alias points to an unreachable key so pydantic-settings
+        # never populates this field from the environment
+        # (POCKETPAW_BUDGET_PAUSED is ignored at load time).
+        validation_alias=AliasChoices("__budget_paused_internal__"),
+        description="Internal runtime flag — set programmatically, never from env",
     )
     budget_override_usd: float | None = Field(
         default=None,
