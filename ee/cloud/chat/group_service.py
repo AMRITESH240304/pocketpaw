@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Literal
 
 from beanie import PydanticObjectId
 
@@ -17,8 +18,10 @@ from ee.cloud.chat.schemas import (
     UpdateGroupAgentRequest,
     UpdateGroupRequest,
 )
-from ee.cloud.models.group import Group, GroupAgent
+from ee.cloud.models.group import Group, GroupAgent, MemberRole
 from ee.cloud.shared.errors import Forbidden, NotFound, ValidationError
+from pocketpaw.ee.guards.actions import GroupRole
+from pocketpaw.ee.guards.audit import log_denial
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,7 @@ async def _group_response(group: Group) -> dict:
                 "agent": ga.agent,
                 "name": agent_doc.name if agent_doc else "Agent",
                 "uname": agent_doc.slug if agent_doc else "",
+                "avatar": agent_doc.avatar if agent_doc else "",
                 "role": ga.role,
                 "respond_mode": ga.respond_mode,
             }
@@ -97,6 +101,7 @@ async def _group_response(group: Group) -> dict:
         "color": group.color,
         "owner": group.owner,
         "members": populated_members,
+        "memberRoles": dict(group.member_roles),
         "agents": populated_agents,
         "pinnedMessages": group.pinned_messages,
         "archived": group.archived,
@@ -109,16 +114,82 @@ async def _group_response(group: Group) -> dict:
 def _require_group_member(group: Group, user_id: str) -> None:
     """Raise Forbidden if user is not a member of the group."""
     if user_id not in group.members:
+        log_denial(
+            actor=user_id,
+            action="group.view",
+            code="group.not_member",
+            resource_id=str(group.id),
+        )
         raise Forbidden("group.not_member", "You are not a member of this group")
 
 
 def _require_group_admin(group: Group, user_id: str) -> None:
-    """Raise Forbidden if user is not the group owner (admin).
+    """Raise Forbidden if user is not a group admin or owner.
 
-    Groups don't have per-member roles -- the owner is the sole admin.
+    Admin tier is derived from ``group.member_roles[user_id] == "admin"``.
+    The group owner is always an implicit admin.
     """
-    if group.owner != user_id:
-        raise Forbidden("group.not_admin", "Only the group owner can perform this action")
+    if group.owner == user_id:
+        return
+    if group.member_roles.get(user_id) == "admin":
+        return
+    log_denial(
+        actor=user_id,
+        action="group.admin",
+        code="group.not_admin",
+        resource_id=str(group.id),
+    )
+    raise Forbidden("group.not_admin", "Only group admins can perform this action")
+
+
+def _role_for(group: Group, user_id: str) -> Literal["owner", "admin", "edit", "view", "none"]:
+    """Return the role of a user in a group.
+
+    - "owner" if user_id == group.owner
+    - member_roles[user_id] if present ("admin" | "edit" | "view")
+    - "edit" if user is a member without an explicit role entry (back-compat default)
+    - "none" if user is not a member
+    """
+    if group.owner == user_id:
+        return "owner"
+    if user_id not in group.members:
+        return "none"
+    explicit = group.member_roles.get(user_id)
+    if explicit in ("admin", "edit", "view"):
+        return explicit  # type: ignore[return-value]
+    return "edit"
+
+
+def resolve_group_role(group: Group, user_id: str) -> GroupRole:
+    """Structured role resolution for the canonical guards matrix.
+
+    Raises Forbidden ``group.not_member`` if the user has no membership.
+    """
+    raw = _role_for(group, user_id)
+    if raw == "none":
+        raise Forbidden("group.not_member", "You are not a member of this group")
+    return GroupRole.from_str("edit" if raw == "edit" else raw)
+
+
+def _require_can_post(group: Group, user_id: str) -> None:
+    """Raise Forbidden if the user's role in the group cannot post / mutate."""
+    role = _role_for(group, user_id)
+    if role == "view":
+        log_denial(
+            actor=user_id,
+            action="group.post",
+            code="group.view_only",
+            resource_id=str(group.id),
+        )
+        raise Forbidden("group.view_only", "You have read-only access in this group")
+    if role == "none":
+        log_denial(
+            actor=user_id,
+            action="group.post",
+            code="group.not_member",
+            resource_id=str(group.id),
+        )
+        raise Forbidden("group.not_member", "You are not a member of this group")
 
 
 async def _get_group_or_404(group_id: str) -> Group:
@@ -183,7 +254,9 @@ class GroupService:
                 "workspace": workspace_id,
                 "archived": False,
                 "$or": [
-                    {"type": "public"},
+                    # Public groups + channels are visible to any workspace member.
+                    # Private groups + DMs require membership.
+                    {"type": {"$in": ["public", "channel"]}},
                     {"members": user_id},
                 ],
             }
@@ -218,6 +291,10 @@ class GroupService:
             group.icon = body.icon
         if body.color is not None:
             group.color = body.color
+        if body.type is not None and body.type != group.type:
+            # DMs can't change type; enforced above. Switching between
+            # private/public/channel just changes who can read.
+            group.type = body.type
 
         await group.save()
         return await _group_response(group)
@@ -260,22 +337,39 @@ class GroupService:
         await group.save()
 
     @staticmethod
-    async def add_members(group_id: str, user_id: str, member_ids: list[str]) -> None:
-        """Add members to a group. Owner only."""
+    async def add_members(
+        group_id: str,
+        user_id: str,
+        member_ids: list[str],
+        role: MemberRole = "edit",
+    ) -> list[str]:
+        """Add members to a group with an initial role. Owner only.
+
+        Returns the list of user IDs that were newly added (skipping duplicates).
+        Role "edit" is the default (no role entry is written to keep the dict
+        small); "view" writes an explicit entry per added member.
+        """
         group = await _get_group_or_404(group_id)
         _require_group_admin(group, user_id)
 
         if group.archived:
             raise Forbidden("group.archived", "Cannot modify an archived group")
 
-        added = False
+        newly_added: list[str] = []
         for mid in member_ids:
             if mid not in group.members:
                 group.members.append(mid)
-                added = True
+                newly_added.append(mid)
+            if role in ("admin", "view"):
+                group.member_roles[mid] = role
+            elif mid in group.member_roles and role == "edit":
+                # Explicit edit removes any lingering admin/view entry
+                group.member_roles.pop(mid, None)
 
-        if added:
+        if newly_added or role in ("admin", "view"):
             await group.save()
+
+        return newly_added
 
     @staticmethod
     async def remove_member(group_id: str, user_id: str, target_user_id: str) -> None:
@@ -290,7 +384,40 @@ class GroupService:
             raise NotFound("member", target_user_id)
 
         group.members.remove(target_user_id)
+        group.member_roles.pop(target_user_id, None)
         await group.save()
+
+    @staticmethod
+    async def set_member_role(
+        group_id: str, user_id: str, target_user_id: str, role: MemberRole
+    ) -> MemberRole:
+        """Set a member's role to "edit" or "view". Owner only.
+
+        Cannot change the owner's role. Raises NotFound if target is not a member.
+        Returns the new role on success.
+        """
+        if role not in ("admin", "edit", "view"):
+            raise ValidationError(
+                "group.invalid_role",
+                f"Role must be one of 'admin', 'edit', 'view'; got {role!r}",
+            )
+
+        group = await _get_group_or_404(group_id)
+        _require_group_admin(group, user_id)
+
+        if target_user_id == group.owner:
+            raise Forbidden("group.cannot_change_owner_role", "Cannot change the owner's role")
+
+        if target_user_id not in group.members:
+            raise NotFound("member", target_user_id)
+
+        if role == "edit":
+            group.member_roles.pop(target_user_id, None)
+        else:
+            group.member_roles[target_user_id] = role
+
+        await group.save()
+        return role
 
     @staticmethod
     async def add_agent(group_id: str, user_id: str, body: AddGroupAgentRequest) -> None:
@@ -368,6 +495,58 @@ class GroupService:
             slug=_generate_slug("dm"),
             type="dm",
             members=members,
+            owner=user_id,
+        )
+        await group.insert()
+        return await _group_response(group)
+
+    @staticmethod
+    async def get_or_create_agent_dm(workspace_id: str, user_id: str, agent_id: str) -> dict:
+        """Find or create a 1:1 DM between the user and an agent.
+
+        Stored as a type="dm" group with ``members=[user_id]`` and a single
+        ``GroupAgent`` (respond_mode="auto" so the agent replies by default).
+        Verifies the user can see the agent (owner | workspace-visible | public).
+        """
+        from ee.cloud.models.agent import Agent as AgentModel
+
+        # Resolve the agent and verify access
+        try:
+            agent_oid = PydanticObjectId(agent_id)
+        except Exception as exc:  # noqa: BLE001 - surface as NotFound
+            raise NotFound("agent", agent_id) from exc
+
+        agent_doc = await AgentModel.get(agent_oid)
+        if not agent_doc:
+            raise NotFound("agent", agent_id)
+
+        visible = (
+            (agent_doc.workspace == workspace_id and agent_doc.owner == user_id)
+            or (agent_doc.workspace == workspace_id and agent_doc.visibility == "workspace")
+            or agent_doc.visibility == "public"
+        )
+        if not visible:
+            raise NotFound("agent", agent_id)
+
+        # Idempotent lookup: a DM in this workspace with exactly this user and this agent
+        existing = await Group.find_one(
+            {
+                "workspace": workspace_id,
+                "type": "dm",
+                "members": [user_id],
+                "agents.agent": agent_id,
+            }
+        )
+        if existing:
+            return await _group_response(existing)
+
+        group = Group(
+            workspace=workspace_id,
+            name="DM",
+            slug=_generate_slug("dm"),
+            type="dm",
+            members=[user_id],
+            agents=[GroupAgent(agent=agent_id, role="assistant", respond_mode="auto")],
             owner=user_id,
         )
         await group.insert()

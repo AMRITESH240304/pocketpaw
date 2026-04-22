@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from beanie import Indexed
 from pydantic import BaseModel, Field
 
 from ee.cloud.models.base import TimestampedDocument
+
+# Group member role tiers (ordered by privilege, ascending):
+#   "view"  — read-only
+#   "edit"  — post/react (the default; absence from member_roles means "edit")
+#   "admin" — can modify group settings, add/remove members & agents
+# The group's `owner` field is the implicit top tier (not stored here).
+MemberRole = Literal["view", "edit", "admin"]
 
 
 class GroupAgent(BaseModel):
@@ -27,8 +35,13 @@ class Group(TimestampedDocument):
     description: str = ""
     icon: str = ""
     color: str = ""
-    type: str = Field(default="public", pattern="^(public|private|dm)$")
+    # Default "private": only explicit members can see/read. Workspace-wide
+    # readable groups are opt-in via type="public" or type="channel".
+    type: str = Field(default="private", pattern="^(public|private|dm|channel)$")
     members: list[str] = Field(default_factory=list)  # User IDs
+    # Per-member role override: "view" = read-only; absent = "edit" (default).
+    # Owner is implicit and not stored here.
+    member_roles: dict[str, MemberRole] = Field(default_factory=dict)
     agents: list[GroupAgent] = Field(default_factory=list)
     pinned_messages: list[str] = Field(default_factory=list)  # Message IDs
     owner: str  # User ID

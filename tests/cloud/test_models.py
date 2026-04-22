@@ -56,7 +56,7 @@ def test_pocket_sharing_fields():
     p = Pocket.model_construct(workspace="w1", name="test", owner="u1")
     assert p.share_link_token is None
     assert p.share_link_access == "view"
-    assert p.visibility == "private"
+    assert p.visibility == "workspace"
     assert p.shared_with == []
 
 

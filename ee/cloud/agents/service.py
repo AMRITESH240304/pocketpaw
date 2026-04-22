@@ -77,6 +77,21 @@ class AgentService:
             owner=user_id,
         )
         await agent.insert()
+
+        # Eagerly materialize the soul on disk so it exists before the agent's
+        # first chat. Failures are non-fatal — lazy init in AgentPool will retry.
+        if config.soul_enabled:
+            try:
+                from pocketpaw.agents.pool import get_agent_pool
+
+                await get_agent_pool().ensure_soul(agent)
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Eager soul creation failed for agent %s", agent.id, exc_info=True
+                )
+
         return _agent_response(agent)
 
     @staticmethod

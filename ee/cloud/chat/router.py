@@ -21,13 +21,18 @@ from ee.cloud.chat.schemas import (
     SendMessageRequest,
     UpdateGroupAgentRequest,
     UpdateGroupRequest,
+    UpdateMemberRoleRequest,
     WsInbound,
     WsOutbound,
 )
 from ee.cloud.chat.service import GroupService, MessageService
 from ee.cloud.chat.ws import manager
 from ee.cloud.license import require_license
-from ee.cloud.shared.deps import current_user_id, current_workspace_id
+from ee.cloud.shared.deps import (
+    current_user_id,
+    current_workspace_id,
+    require_group_action,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +72,10 @@ async def get_group(
     return await GroupService.get_group(group_id, user_id)
 
 
-@_licensed.patch("/groups/{group_id}")
+@_licensed.patch(
+    "/groups/{group_id}",
+    dependencies=[Depends(require_group_action("group.admin"))],
+)
 async def update_group(
     group_id: str,
     body: UpdateGroupRequest,
@@ -76,7 +84,10 @@ async def update_group(
     return await GroupService.update_group(group_id, user_id, body)
 
 
-@_licensed.post("/groups/{group_id}/archive")
+@_licensed.post(
+    "/groups/{group_id}/archive",
+    dependencies=[Depends(require_group_action("group.admin"))],
+)
 async def archive_group(
     group_id: str,
     user_id: str = Depends(current_user_id),
@@ -103,23 +114,59 @@ async def leave_group(
     return {"ok": True}
 
 
-@_licensed.post("/groups/{group_id}/members")
+@_licensed.post(
+    "/groups/{group_id}/members",
+    dependencies=[Depends(require_group_action("group.admin"))],
+)
 async def add_members(
     group_id: str,
     body: AddGroupMembersRequest,
     user_id: str = Depends(current_user_id),
 ):
-    await GroupService.add_members(group_id, user_id, body.user_ids)
-    return {"ok": True}
+    added = await GroupService.add_members(group_id, user_id, body.user_ids, body.role)
+    await _broadcast_members_event(
+        group_id,
+        "members.added",
+        {"group_id": group_id, "user_ids": added, "role": body.role},
+    )
+    return {"ok": True, "added": added}
 
 
-@_licensed.delete("/groups/{group_id}/members/{target_user_id}", status_code=204)
+@_licensed.delete(
+    "/groups/{group_id}/members/{target_user_id}",
+    status_code=204,
+    dependencies=[Depends(require_group_action("group.admin"))],
+)
 async def remove_member(
     group_id: str,
     target_user_id: str,
     user_id: str = Depends(current_user_id),
 ):
     await GroupService.remove_member(group_id, user_id, target_user_id)
+    await _broadcast_members_event(
+        group_id,
+        "members.removed",
+        {"group_id": group_id, "user_id": target_user_id},
+    )
+
+
+@_licensed.patch(
+    "/groups/{group_id}/members/{target_user_id}/role",
+    dependencies=[Depends(require_group_action("group.admin"))],
+)
+async def update_member_role(
+    group_id: str,
+    target_user_id: str,
+    body: UpdateMemberRoleRequest,
+    user_id: str = Depends(current_user_id),
+):
+    new_role = await GroupService.set_member_role(group_id, user_id, target_user_id, body.role)
+    await _broadcast_members_event(
+        group_id,
+        "members.role_changed",
+        {"group_id": group_id, "user_id": target_user_id, "role": new_role},
+    )
+    return {"ok": True, "role": new_role}
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +174,10 @@ async def remove_member(
 # ---------------------------------------------------------------------------
 
 
-@_licensed.post("/groups/{group_id}/agents")
+@_licensed.post(
+    "/groups/{group_id}/agents",
+    dependencies=[Depends(require_group_action("group.admin"))],
+)
 async def add_group_agent(
     group_id: str,
     body: AddGroupAgentRequest,
@@ -137,7 +187,10 @@ async def add_group_agent(
     return {"ok": True}
 
 
-@_licensed.patch("/groups/{group_id}/agents/{agent_id}")
+@_licensed.patch(
+    "/groups/{group_id}/agents/{agent_id}",
+    dependencies=[Depends(require_group_action("group.admin"))],
+)
 async def update_group_agent(
     group_id: str,
     agent_id: str,
@@ -148,7 +201,11 @@ async def update_group_agent(
     return {"ok": True}
 
 
-@_licensed.delete("/groups/{group_id}/agents/{agent_id}", status_code=204)
+@_licensed.delete(
+    "/groups/{group_id}/agents/{agent_id}",
+    status_code=204,
+    dependencies=[Depends(require_group_action("group.admin"))],
+)
 async def remove_group_agent(
     group_id: str,
     agent_id: str,
@@ -267,8 +324,43 @@ async def get_or_create_dm(
     return await GroupService.get_or_create_dm(workspace_id, user_id, target_user_id)
 
 
+@_licensed.post("/dm-agent/{agent_id}")
+async def get_or_create_agent_dm(
+    agent_id: str,
+    workspace_id: str = Depends(current_workspace_id),
+    user_id: str = Depends(current_user_id),
+):
+    """Find or create a 1:1 DM between the caller and an agent."""
+    return await GroupService.get_or_create_agent_dm(workspace_id, user_id, agent_id)
+
+
 # Include licensed REST routes
 router.include_router(_licensed)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _broadcast_members_event(group_id: str, event_type: str, data: dict) -> None:
+    """Broadcast a member/role change to all current group members.
+
+    Loads the group freshly so the broadcast reflects post-mutation membership
+    (a removed user, for example, no longer receives the event).
+    """
+    from beanie import PydanticObjectId
+
+    from ee.cloud.models.group import Group
+
+    group = await Group.get(PydanticObjectId(group_id))
+    if not group:
+        return
+    await manager.broadcast_to_group(
+        group_id,
+        group.members,
+        WsOutbound(type=event_type, data=data),
+    )
 
 
 # ---------------------------------------------------------------------------

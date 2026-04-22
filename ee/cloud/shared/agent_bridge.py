@@ -236,6 +236,40 @@ async def _run_agent_response(
                         },
                     ),
                 )
+            elif event.type == "tool_use":
+                # Notify clients which tool the agent is using
+                tool_name = ""
+                if isinstance(event.content, dict):
+                    tool_name = event.content.get("tool") or event.content.get("name") or ""
+                elif isinstance(event.content, str):
+                    tool_name = event.content
+                await ws_manager.broadcast_to_group(
+                    group_id,
+                    group_members,
+                    WsOutbound(
+                        type="agent.tool_use",
+                        data={
+                            "group_id": group_id,
+                            "agent_id": agent_id,
+                            "agent_name": instance.agent_name,
+                            "tool": tool_name,
+                        },
+                    ),
+                )
+            elif event.type == "thinking":
+                await ws_manager.broadcast_to_group(
+                    group_id,
+                    group_members,
+                    WsOutbound(
+                        type="agent.tool_use",
+                        data={
+                            "group_id": group_id,
+                            "agent_id": agent_id,
+                            "agent_name": instance.agent_name,
+                            "tool": "thinking",
+                        },
+                    ),
+                )
             elif event.type == "done":
                 break
     except Exception:

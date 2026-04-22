@@ -11,7 +11,11 @@ from ee.cloud.sessions.schemas import (
     UpdateSessionRequest,
 )
 from ee.cloud.sessions.service import SessionService
-from ee.cloud.shared.deps import current_user_id, current_workspace_id
+from ee.cloud.shared.deps import (
+    current_user_id,
+    current_workspace_id,
+    require_action_any_workspace,
+)
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"], dependencies=[Depends(require_license)])
 
@@ -20,7 +24,7 @@ router = APIRouter(prefix="/sessions", tags=["Sessions"], dependencies=[Depends(
 # ---------------------------------------------------------------------------
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_action_any_workspace("session.read_own"))])
 async def create_session(
     body: CreateSessionRequest,
     workspace_id: str = Depends(current_workspace_id),
@@ -29,7 +33,7 @@ async def create_session(
     return await SessionService.create(workspace_id, user_id, body)
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_action_any_workspace("session.read_own"))])
 async def list_sessions(
     workspace_id: str = Depends(current_workspace_id),
     user_id: str = Depends(current_user_id),

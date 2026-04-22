@@ -4449,6 +4449,7 @@ enterprise = [
     { name = "python-socketio" },
     { name = "redis", extra = ["hiredis"] },
     { name = "slowapi" },
+    { name = "soul-protocol" },
 ]
 extract = [
     { name = "html2text" },
@@ -4686,6 +4687,7 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.50.0" },
     { name = "playwright", marker = "extra == 'recommended'", specifier = ">=1.50.0" },
     { name = "pocketpaw", extras = ["openai-agents", "google-adk", "copilot-sdk", "deep-agents", "litellm"], marker = "extra == 'all-backends'" },
+    { name = "pocketpaw", extras = ["soul"], marker = "extra == 'enterprise'" },
     { name = "psutil", marker = "extra == 'all'", specifier = ">=5.9.0" },
     { name = "psutil", marker = "extra == 'all-tools'", specifier = ">=5.9.0" },
     { name = "psutil", marker = "extra == 'desktop'", specifier = ">=5.9.0" },
@@ -4730,9 +4732,9 @@ requires-dist = [
     { name = "slack-bolt", marker = "extra == 'slack'", specifier = ">=1.20.0" },
     { name = "slowapi", marker = "extra == 'enterprise'", specifier = ">=0.1.9" },
     { name = "soul-protocol", extras = ["engine"], specifier = ">=0.3.1" },
-    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'all'", specifier = ">=0.2.9" },
-    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'all-tools'", specifier = ">=0.2.9" },
-    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'soul'", specifier = ">=0.2.9" },
+    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'all'", specifier = ">=0.3.0" },
+    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'all-tools'", specifier = ">=0.3.0" },
+    { name = "soul-protocol", extras = ["engine"], marker = "extra == 'soul'", specifier = ">=0.3.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'databases'", specifier = ">=2.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'mysql'", specifier = ">=2.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'postgresql'", specifier = ">=2.0.0" },

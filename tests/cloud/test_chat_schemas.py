@@ -21,7 +21,7 @@ from ee.cloud.chat.schemas import (
 
 def test_create_group_defaults():
     req = CreateGroupRequest(name="general")
-    assert req.type == "public" and req.description == ""
+    assert req.type == "private" and req.description == ""
 
 
 def test_create_group_dm():

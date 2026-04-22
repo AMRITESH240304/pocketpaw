@@ -19,7 +19,7 @@ class CreatePocketRequest(BaseModel):
     type: str = "custom"
     icon: str = ""
     color: str = ""
-    visibility: str = Field(default="private", pattern="^(private|workspace|public)$")
+    visibility: str = Field(default="workspace", pattern="^(private|workspace|public)$")
     session_id: str | None = Field(default=None, alias="sessionId")
     agents: list[str] = Field(default_factory=list)  # Agent IDs to assign
     ripple_spec: dict | None = Field(default=None, alias="rippleSpec")

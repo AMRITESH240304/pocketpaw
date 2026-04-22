@@ -74,6 +74,15 @@ def mount_cloud(app: FastAPI) -> None:
             for u in users
         ]
 
+    # Serve uploaded avatars from ~/.pocketpaw/uploads/
+    from pathlib import Path
+
+    from fastapi.staticfiles import StaticFiles
+
+    uploads_dir = Path.home() / ".pocketpaw" / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
+
     # Mount WebSocket at root path (not under /api/v1 prefix)
     # so frontend can connect to ws://host/ws/cloud?token=...
     from ee.cloud.chat.router import websocket_endpoint
