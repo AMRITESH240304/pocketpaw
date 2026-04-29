@@ -1,7 +1,7 @@
-# Updated: 2026-04-09 — Release 0.4.16: security rollup (CredentialStore v2, WS auth, dangerous-cmd hardening, OWASP fixes), discli 0.7, soul 0.2.9, Python 3.14 warning, fast-chat disabled for CLI compaction.
+# Updated: 2026-04-29 — Release 0.4.18: dev → main sync (PR #1015) — file jail OCR/STT, scope enforcement + fail-closed require_scope, SSRF guard scaffolding, PII tightening, rate-limiter race fix + ReDoS bounds, audit-log scrubbing, dynamic cookie Secure flag, nonce-based CSP, plus bus mutation leakage and token-usage propagation fixes.
 [project]
 name = "pocketpaw"
-version = "0.4.16"
+version = "0.4.18"
 description = "The AI agent that runs on your laptop, not a datacenter. OpenClaw alternative with one-command install."
 readme = "README.md"
 license = "MIT"
@@ -61,11 +61,26 @@ dependencies = [
     "cryptography>=46.0.0",
     # Image basics
     "pillow>=10.0.0",
+    # Soul Protocol — runtime imports from soul_protocol.spec.journal and
+    # soul_protocol.engine.journal for fleet installer event emission (#947).
+    # Promoted from optional extra to base dep in v0.3.1 integration work;
+    # the runtime now takes a hard dependency on the journal primitives.
+    "soul-protocol[engine]>=0.3.1",
 ]
 
 [project.optional-dependencies]
 # --- Feature extras ---
-vector = ["chromadb"]
+vector = ["chromadb", "bm25s"]
+knowledge = ["trafilatura", "bm25s", "pypdf"]
+databases = [
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.29.0",       # PostgreSQL
+    "aiomysql>=0.2.0",       # MySQL / MariaDB
+    "aiosqlite>=0.20.0",     # SQLite
+]
+postgresql = ["sqlalchemy[asyncio]>=2.0.0", "asyncpg>=0.29.0"]
+mysql = ["sqlalchemy[asyncio]>=2.0.0", "aiomysql>=0.2.0"]
+mongodb = ["motor>=3.3.0", "beanie>=1.26.0"]
 graph = ["networkx>=3.0"]
 dashboard = [
     # Kept for backward compat — dashboard deps are now in core.
@@ -102,7 +117,7 @@ memory = [
     "ollama>=0.6.1",
 ]
 soul = [
-    "soul-protocol[engine]>=0.2.9",
+    "soul-protocol[engine]>=0.3.0",
 ]
 
 # --- Channel extras ---
@@ -125,6 +140,15 @@ teams = [
 gchat = [
     "google-api-python-client>=2.100.0",
     "google-auth>=2.25.0",
+]
+drive = [
+    # Google Drive SourceAdapter (zero-copy live federation) — see
+    # src/pocketpaw/connectors/drive/. The client itself runs on httpx (core
+    # dep), but we ship the Google SDK alongside for parity with gchat and
+    # for future DriveIngestAdapter bulk-sync work.
+    "google-api-python-client>=2.100.0",
+    "google-auth>=2.25.0",
+    "google-auth-oauthlib>=1.2.0",
 ]
 
 # --- Tool extras ---
@@ -179,9 +203,10 @@ all-channels = [
     # teams
     "botbuilder-core>=4.16.0",
     "botbuilder-integration-aiohttp>=4.16.0",
-    # gchat
+    # gchat + drive
     "google-api-python-client>=2.100.0",
     "google-auth>=2.25.0",
+    "google-auth-oauthlib>=1.2.0",
 ]
 all-tools = [
     # browser
@@ -207,10 +232,34 @@ all-tools = [
     # graph
     "networkx>=3.0",
     # soul
-    "soul-protocol[engine]>=0.2.9",
+    "soul-protocol[engine]>=0.3.0",
 ]
 all-backends = [
     "pocketpaw[openai-agents,google-adk,copilot-sdk,deep-agents,litellm]",
+]
+enterprise = [
+    # MongoDB (async ODM)
+    "motor>=3.3.0",
+    "beanie>=1.26.0",
+    # Auth (user management + OAuth2 + JWT with Beanie backend)
+    "fastapi-users[beanie,oauth]>=13.0.0",
+    "pwdlib[argon2]>=0.2.0",
+    # Real-time (Socket.IO compat for enterprise multi-user)
+    "python-socketio>=5.11.0",
+    # Rate limiting
+    "slowapi>=0.1.9",
+    # File storage (S3 + GCS)
+    "boto3>=1.34.0",
+    "google-cloud-storage>=2.14.0",
+    # Voice/video tokens
+    "livekit-api>=0.6.0",
+    # Redis (session cache, pub/sub)
+    "redis[hiredis]>=5.0.0",
+    # OAuth integrations (Google APIs)
+    "google-api-python-client>=2.100.0",
+    "google-auth>=2.25.0",
+    "google-auth-oauthlib>=1.2.0",
+    "pocketpaw[soul]"
 ]
 all = [
     # browser
@@ -231,6 +280,7 @@ all = [
     "botbuilder-integration-aiohttp>=4.16.0",
     "google-api-python-client>=2.100.0",
     "google-auth>=2.25.0",
+    "google-auth-oauthlib>=1.2.0",
     # tools
     "google-genai>=1.0.0",
     "html2text>=2020.1.16",
@@ -239,7 +289,7 @@ all = [
     "sarvamai>=0.1.25",
     "mcp>=1.0.0",
     # soul
-    "soul-protocol[engine]>=0.2.9",
+    "soul-protocol[engine]>=0.3.0",
     # backends
     "openai-agents>=0.2.0",
     "google-adk>=1.0.0",
@@ -297,8 +347,11 @@ Twitter = "https://twitter.com/prakashd88"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
-only-include = ["src/pocketpaw"]
+only-include = ["src/pocketpaw", "ee"]
 
 [tool.hatch.build.targets.wheel.sources]
 "src" = ""
@@ -349,3 +402,7 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "--ignore=tests/cloud --ignore=tests/e2e"
+markers = [
+    "enforce_scope: opt a test out of the global _TESTING_FULL_ACCESS bypass so require_scope fails closed as in production",
+]

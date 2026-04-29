@@ -28,6 +28,7 @@ from typing import Any
 from pocketpaw.agents.backend import _DEFAULT_IDENTITY, BackendInfo, Capability
 from pocketpaw.agents.protocol import AgentEvent
 from pocketpaw.config import Settings
+from pocketpaw.tools.policy import ToolPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +77,24 @@ class CodexCLIBackend:
         self._codex_path = shutil.which("codex")
         self._cli_available = self._codex_path is not None
         self._process: asyncio.subprocess.Process | None = None
+        self._policy = ToolPolicy(
+            profile=settings.tool_profile,
+            allow=settings.tools_allow,
+            deny=settings.tools_deny,
+        )
         if self._cli_available:
             logger.info("Codex CLI found: %s", self._codex_path)
         else:
             logger.warning("Codex CLI not found — install with: npm install -g @openai/codex")
+
+    def get_tool_policy(self) -> ToolPolicy:
+        return self._policy
+
+    def set_tool_policy(self, policy: ToolPolicy) -> None:
+        # Policy is stored but never enforced — Codex runs tools inside an
+        # external CLI process that has no awareness of this policy.
+        logger.debug("set_tool_policy on CodexCLIBackend: stored but not enforced (external CLI)")
+        self._policy = policy
 
     @staticmethod
     def _inject_history(instruction: str, history: list[dict]) -> str:

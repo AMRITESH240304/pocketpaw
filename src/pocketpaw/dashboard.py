@@ -29,6 +29,7 @@ import base64
 import io
 import json
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -166,6 +167,9 @@ _EXTRA_ORIGINS = list(set(_BUILTIN_ORIGINS + _custom_origins))
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     """Add security headers to all responses."""
+    nonce = secrets.token_urlsafe(16)
+    request.state.csp_nonce = nonce
+
     response = await call_next(request)
 
     # Allow the file-content endpoint to be embedded in same-origin iframes
@@ -179,10 +183,10 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    # CSP: allow self + CDN + inline styles/scripts (required by Alpine.js/UnoCSS)
+    # CSP: allow self + CDN + strictly nonced scripts (Alpine evaluates allowed via unsafe-eval)
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
+        f"script-src 'self' 'nonce-{nonce}' 'unsafe-eval' "
         "https://cdn.jsdelivr.net https://unpkg.com; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; "
@@ -207,6 +211,17 @@ app.include_router(mission_control_router, prefix="/api/mission-control")
 
 app.include_router(deep_work_router, prefix="/api/deep-work")
 
+# Mount enterprise cloud module FIRST (takes priority over core v1 routers)
+try:
+    from ee.cloud import mount_cloud
+
+    mount_cloud(app)
+    logger.info("Enterprise cloud module mounted successfully")
+except ImportError as exc:
+    logger.debug("Enterprise cloud module not available: %s", exc)
+except Exception:
+    logger.warning("Cloud module mount failed", exc_info=True)
+
 # Mount API v1 routers at /api/v1/ (canonical) — see api/v1/__init__.py
 mount_v1_routers(app)
 
@@ -217,6 +232,10 @@ try:
     _a2a_register_routes(app)
 except Exception as _a2a_exc:
     logger.warning("A2A Protocol unavailable — skipping router mount: %s", _a2a_exc)
+
+# Mount Socket.IO for enterprise real-time group chat
+# NOTE: Socket.IO ASGI wrapper is applied AFTER all routes/middleware are registered.
+# See bottom of file: the module-level `app` is replaced with the wrapped version.
 
 # Mount channel management router (webhooks, extras, channel status/toggle)
 app.include_router(channels_router)
@@ -1789,6 +1808,21 @@ def run_dashboard(
                 logger.error("Max restart limit (%d) reached, exiting.", _MAX_RESTARTS)
                 break
             logger.info("Restarting server with updated settings...")
+
+
+# ---------------------------------------------------------------------------
+# Wrap FastAPI app with Socket.IO ASGI middleware (enterprise real-time chat)
+# Must be AFTER all routes and middleware are registered.
+# ---------------------------------------------------------------------------
+try:
+    from ee.cloud.socketio_server import wrap_asgi_app
+
+    app = wrap_asgi_app(app)
+    logger.info("Socket.IO ASGI wrapper applied")
+except ImportError:
+    pass
+except Exception as _sio_exc:
+    logger.warning("Socket.IO wrapper failed: %s", _sio_exc)
 
 
 if __name__ == "__main__":

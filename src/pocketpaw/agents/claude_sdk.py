@@ -125,6 +125,12 @@ class ClaudeSDKBackend:
 
         self._initialize()
 
+    def get_tool_policy(self) -> ToolPolicy:
+        return self._policy
+
+    def set_tool_policy(self, policy: ToolPolicy) -> None:
+        self._policy = policy
+
     def _initialize(self) -> None:
         """Initialize the Claude Agent SDK with all imports."""
         try:
@@ -294,9 +300,13 @@ class ClaudeSDKBackend:
 
             matched = self._is_dangerous_command(command)
             if matched:
-                logger.warning(f"🛑 BLOCKED dangerous command: {command[:100]}")
-                logger.warning(f"   └─ Matched pattern: {matched}")
-                # Audit log the blocked command
+                # Scrub before logging — dangerous commands routinely carry
+                # Authorization headers or API keys inline (#893).
+                from pocketpaw.security.scrub import scrub_command
+
+                safe_command = scrub_command(command)
+                logger.warning("🛑 BLOCKED dangerous command: %s", safe_command[:100])
+                logger.warning("   └─ Matched pattern: %s", matched)
                 try:
                     from pocketpaw.security.audit import (
                         AuditEvent,
@@ -311,7 +321,7 @@ class ClaudeSDKBackend:
                             action="dangerous_command_blocked",
                             target="bash",
                             status="block",
-                            command=command[:500],
+                            command=safe_command[:500],
                             matched_pattern=matched,
                         )
                     )
@@ -660,7 +670,7 @@ class ClaudeSDKBackend:
             # ── API key check for Anthropic provider ──────────────
             # Skip if using a non-Anthropic provider, or if the active
             # provider is claude_code (it handles OAuth auth via its CLI).
-            is_claude_code_provider = provider in ("claude_code", "claude_agent_sdk")
+            _is_claude_code_provider = provider in ("claude_code", "claude_agent_sdk")
             is_non_anthropic = (
                 llm.is_ollama
                 or llm.is_openai_compatible
@@ -668,24 +678,24 @@ class ClaudeSDKBackend:
                 or llm.is_litellm
                 or llm.is_openrouter
             )
-            if not is_non_anthropic:
-                has_api_key = bool(llm.api_key or os.environ.get("ANTHROPIC_API_KEY"))
-                if not has_api_key and not is_claude_code_provider:
-                    yield AgentEvent(
-                        type="error",
-                        content=(
-                            "**API key required** -- The Claude SDK backend needs "
-                            "an Anthropic API key.\n\n"
-                            "**How to fix:**\n"
-                            "1. Get an API key at "
-                            "[console.anthropic.com](https://console.anthropic.com/settings/keys)\n"
-                            "2. Add it in **Settings > API Keys > Anthropic API Key**\n"
-                            "3. Or set the `ANTHROPIC_API_KEY` environment variable\n\n"
-                            "*Alternatively, switch to **Ollama (Local)** in Settings "
-                            "> General for free local inference.*"
-                        ),
-                    )
-                    return
+            # if not is_non_anthropic:
+            #     has_api_key = bool(llm.api_key or os.environ.get("ANTHROPIC_API_KEY"))
+            #     if not has_api_key and not is_claude_code_provider:
+            #         yield AgentEvent(
+            #             type="error",
+            #             content=(
+            #                 "**API key required** -- The Claude SDK backend needs "
+            #                 "an Anthropic API key.\n\n"
+            #                 "**How to fix:**\n"
+            #                 "1. Get an API key at "
+            #                 "[console.anthropic.com](https://console.anthropic.com/settings/keys)\n"
+            #                 "2. Add it in **Settings > API Keys > Anthropic API Key**\n"
+            #                 "3. Or set the `ANTHROPIC_API_KEY` environment variable\n\n"
+            #                 "*Alternatively, switch to **Ollama (Local)** in Settings "
+            #                 "> General for free local inference.*"
+            #             ),
+            #         )
+            #         return
 
             # Smart model routing — classify complexity to pick the model tier.
             # All messages go through the Claude Code CLI subprocess, which
@@ -706,6 +716,37 @@ class ClaudeSDKBackend:
             # System prompt — instructions are now part of identity
             # (injected by BootstrapContext.to_system_prompt() via INSTRUCTIONS.md)
             identity = system_prompt or _DEFAULT_IDENTITY
+
+            # Inject connector instructions so the agent can use data sources
+            try:
+                from pocketpaw.connectors.registry import ConnectorRegistry
+
+                reg = ConnectorRegistry()
+                if reg.available:
+                    names = ", ".join(c["name"] for c in reg.available)
+                    identity += (
+                        "\n\n# Data Connectors\n"
+                        f"Available connectors: {names}\n"
+                        "To manage connectors, use Bash to call the local API:\n"
+                        "- List: curl -s http://localhost:8888/api/v1/connectors\n"
+                        "- Detail: curl -s http://localhost:8888/api/v1/connectors/<name>\n"
+                        "- Connect: curl -s -X POST "
+                        "http://localhost:8888/api/v1/connectors/connect "
+                        "-H 'Content-Type: application/json' "
+                        '-d \'{"connector_name":"<name>","config":{...}}\'\n'
+                        "- Execute: curl -s -X POST "
+                        "http://localhost:8888/api/v1/connectors/execute "
+                        "-H 'Content-Type: application/json' "
+                        '-d \'{"connector_name":"<name>","action":"<action>"'
+                        ',"params":{...}}\'\n'
+                        "- Disconnect: curl -s -X POST "
+                        "http://localhost:8888/api/v1/connectors/disconnect "
+                        "-H 'Content-Type: application/json' "
+                        '-d \'{"connector_name":"<name>"}\'\n'
+                    )
+            except Exception:
+                pass  # Don't break agent if connector registry fails
+
             # The persistent ClaudeSDKClient maintains conversation history
             # natively across query() calls, so we do NOT inject history into
             # the system prompt for that path. History is only appended for
@@ -980,7 +1021,7 @@ class ClaudeSDKBackend:
                                     )
                                 else:
                                     continue
-                                if result_text and "<!-- media:" in result_text:
+                                if result_text:
                                     yield AgentEvent(
                                         type="tool_result",
                                         content=result_text,

@@ -1,9 +1,14 @@
 """Configuration management for PocketPaw.
 
 Changes:
+  - 2026-04-16: SSRF guard on URL config fields — opencode_base_url,
+    litellm_api_base, openai_compatible_base_url, mem0_ollama_base_url,
+    embedding_base_url, signal_api_url, mcp_client_metadata_url are now
+    validated by security.url_validators.validate_external_url. Closes #703.
+  - 2026-04-10: Removed old pocketclaw migration warning — fully shifted to pocketpaw.
+  - 2026-04-04: Added soul_cognitive_model setting for cheaper cognitive processing.
   - 2026-03-16: Use Literal types for whatsapp_mode, tts_provider, stt_provider (#638).
   - 2026-02-17: Added health_check_on_startup field for Health Engine.
-  - 2026-02-14: Add migration warning for old ~/.pocketclaw/ config dir and POCKETCLAW_ env vars.
   - 2026-02-06: Secrets stored encrypted via CredentialStore; auto-migrate plaintext keys.
   - 2026-02-06: Harden file/directory permissions (700 dir, 600 files).
   - 2026-02-02: Added claude_agent_sdk to agent_backend options.
@@ -18,10 +23,16 @@ import logging
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import AfterValidator, AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from pocketpaw.security.url_validators import validate_external_url
+
+# Shorthand for Settings URL fields that must be safe from SSRF (#703).
+# Applies scheme + loopback/RFC1918 guards from security.url_validators.
+ExternalUrl = Annotated[str, AfterValidator(validate_external_url)]
 
 logger = logging.getLogger(__name__)
 
@@ -96,44 +107,11 @@ def _chmod_safe(path: Path, mode: int) -> None:
         pass
 
 
-_OLD_CONFIG_WARNING_SHOWN = False
-
-
-def _warn_old_config() -> None:
-    """Print a one-time warning if the old ~/.pocketclaw/ config dir or env vars exist."""
-    import os
-
-    global _OLD_CONFIG_WARNING_SHOWN  # noqa: PLW0603
-    if _OLD_CONFIG_WARNING_SHOWN:
-        return
-    _OLD_CONFIG_WARNING_SHOWN = True
-
-    old_dir = Path.home() / ".pocketclaw"
-    if old_dir.exists():
-        logger.warning(
-            "Found old config directory at ~/.pocketclaw/. "
-            "PocketPaw now uses ~/.pocketpaw/. "
-            "To keep your settings, run:\n"
-            "  cp -r ~/.pocketclaw/* ~/.pocketpaw/\n"
-            "Then remove the old directory when you're satisfied everything works."
-        )
-
-    # Check for old POCKETCLAW_ env vars
-    old_vars = [k for k in os.environ if k.startswith("POCKETCLAW_")]
-    if old_vars:
-        logger.warning(
-            "Found old POCKETCLAW_* environment variables: %s. "
-            "Rename them to POCKETPAW_* (e.g. POCKETPAW_ANTHROPIC_API_KEY).",
-            ", ".join(old_vars),
-        )
-
-
 def get_config_dir() -> Path:
     """Get the config directory, creating if needed."""
     config_dir = Path.home() / ".pocketpaw"
     config_dir.mkdir(exist_ok=True)
     _chmod_safe(config_dir, 0o700)
-    _warn_old_config()
     return config_dir
 
 
@@ -176,7 +154,12 @@ def validate_api_keys(settings: Settings) -> list[str]:
 class Settings(BaseSettings):
     """PocketPaw settings with env and file support."""
 
-    model_config = SettingsConfigDict(env_prefix="POCKETPAW_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="POCKETPAW_",
+        env_file=".env",
+        extra="ignore",
+        populate_by_name=True,  # allow field-name assignment alongside aliases
+    )
 
     # Telegram
     telegram_bot_token: str | None = Field(
@@ -282,7 +265,7 @@ class Settings(BaseSettings):
     )
 
     # OpenCode Settings
-    opencode_base_url: str = Field(
+    opencode_base_url: ExternalUrl = Field(
         default="http://localhost:4096",
         description="OpenCode server URL",
     )
@@ -295,7 +278,7 @@ class Settings(BaseSettings):
     )
 
     # LiteLLM Proxy / SDK Configuration
-    litellm_api_base: str = Field(
+    litellm_api_base: ExternalUrl = Field(
         default="http://localhost:4000",
         description="LiteLLM proxy server URL (used when any backend provider is set to 'litellm')",
     )
@@ -326,7 +309,7 @@ class Settings(BaseSettings):
     )
     ollama_host: str = Field(default="http://localhost:11434", description="Ollama API host")
     ollama_model: str = Field(default="llama3.2", description="Ollama model to use")
-    openai_compatible_base_url: str = Field(
+    openai_compatible_base_url: ExternalUrl = Field(
         default="",
         description="Base URL for OpenAI-compatible endpoint (LiteLLM, OpenRouter, vLLM, etc.)",
     )
@@ -370,6 +353,20 @@ class Settings(BaseSettings):
     vectordb_path: str = Field(
         default="~/.pocketpaw/chroma_db", description="Storage path for the vector database"
     )
+    vectordb_embedding_provider: str = Field(
+        default="default",
+        description=(
+            "Embedding provider: 'default' (sentence-transformers), 'openai', 'huggingface'"
+        ),
+    )
+    vectordb_embedding_model: str = Field(
+        default="all-MiniLM-L6-v2",
+        description=(
+            "Embedding model name. For HuggingFace: any model ID"
+            " (e.g. 'BAAI/bge-small-en-v1.5')."
+            " For OpenAI: 'text-embedding-3-small'"
+        ),
+    )
     memory_use_inference: bool = Field(
         default=True, description="Use LLM to extract facts from memories (only for mem0 backend)"
     )
@@ -395,7 +392,7 @@ class Settings(BaseSettings):
         default="qdrant",
         description="Vector store for mem0: 'qdrant' or 'chroma'",
     )
-    mem0_ollama_base_url: str = Field(
+    mem0_ollama_base_url: ExternalUrl = Field(
         default="http://localhost:11434",
         description="Ollama base URL for mem0 (when using ollama provider)",
     )
@@ -427,7 +424,7 @@ class Settings(BaseSettings):
         default="nomic-embed-text",
         description="Embedding model for file memory semantic retrieval",
     )
-    embedding_base_url: str = Field(
+    embedding_base_url: ExternalUrl = Field(
         default="http://localhost:11434",
         description="Embedding provider base URL (for ollama)",
     )
@@ -630,6 +627,67 @@ class Settings(BaseSettings):
         description="Tools that require approval in plan mode",
     )
 
+    # Budget Controls
+    budget_monthly_usd: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Monthly budget cap in USD. 0 = unlimited",
+    )
+    budget_warning_threshold: float = Field(
+        default=0.8,
+        gt=0.0,
+        le=1.0,
+        description="Warn when spend crosses this fraction of budget (0.8 = 80%)",
+    )
+    budget_auto_pause: bool = Field(
+        default=True,
+        description="Auto-pause agent processing when budget is exhausted",
+    )
+    budget_reset_day: int = Field(
+        default=1,
+        ge=1,
+        le=28,
+        description="Day of month when the budget window resets (1-28)",
+    )
+    per_agent_caps: dict[str, float] = Field(
+        default_factory=dict,
+        description=(
+            "Per-agent monthly budget caps in USD. Keys are agent backend names "
+            "(e.g. 'claude_agent_sdk', 'openai_agents'). "
+            "0 or missing = inherit global cap. Example: {'claude_agent_sdk': 5.0}"
+        ),
+    )
+    budget_paused: bool = Field(
+        default=False,
+        exclude=True,  # excluded from JSON serialization
+        # validation_alias points to an unreachable key so pydantic-settings
+        # never populates this field from the environment
+        # (POCKETPAW_BUDGET_PAUSED is ignored at load time).
+        validation_alias=AliasChoices("__budget_paused_internal__"),
+        description="Internal runtime flag — set programmatically, never from env",
+    )
+    budget_override_usd: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Temporary budget override cap in USD (None = no override)",
+    )
+    budget_override_reason: str = Field(
+        default="",
+        description="Reason for the active budget override",
+    )
+    budget_override_expires_at: str | None = Field(
+        default=None,
+        description="ISO timestamp when the temporary budget override expires",
+    )
+
+    # Trace retention
+    trace_retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="How many days of trace files to keep",
+    )
+
     # Self-Audit Daemon
     self_audit_enabled: bool = Field(default=True, description="Enable daily self-audit daemon")
     self_audit_schedule: str = Field(
@@ -710,7 +768,7 @@ class Settings(BaseSettings):
     )
 
     # Signal
-    signal_api_url: str = Field(
+    signal_api_url: ExternalUrl = Field(
         default="http://localhost:8080", description="Signal-cli REST API URL"
     )
     signal_phone_number: str | None = Field(
@@ -795,7 +853,7 @@ class Settings(BaseSettings):
     )
 
     # MCP OAuth
-    mcp_client_metadata_url: str = Field(
+    mcp_client_metadata_url: ExternalUrl = Field(
         default="",
         description="CIMD URL for MCP OAuth (optional, for servers without dynamic registration)",
     )
@@ -808,7 +866,7 @@ class Settings(BaseSettings):
 
     # Soul Protocol
     soul_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Enable soul-protocol for persistent AI identity, memory, and emotion",
     )
     soul_name: str = Field(
@@ -864,6 +922,31 @@ class Settings(BaseSettings):
             "mood_inertia: resistance to mood change (0-1). "
             "tired_threshold: energy level that triggers fatigue. "
             "auto_regen: passive energy recovery rate."
+        ),
+    )
+    kb_scope: str = Field(
+        default="",
+        description=(
+            "Knowledge base scope to query via the `kb` CLI (github.com/qbtrix/kb-go). "
+            "When set and the kb binary is on PATH, relevant articles are injected "
+            "into the agent system prompt alongside soul memories. Empty = disabled."
+        ),
+    )
+    kb_binary: str = Field(
+        default="kb",
+        description="Path to the kb binary (default: `kb` on PATH)",
+    )
+    kb_limit: int = Field(
+        default=3,
+        description="Number of top articles to inject from kb search (default: 3)",
+    )
+
+    soul_cognitive_model: str = Field(
+        default="",
+        description=(
+            "Model to use for soul cognitive processing (sentiment, significance, "
+            "fact/entity extraction). Empty = use main agent backend. Set to a cheaper "
+            "model like 'claude-haiku-4-5-20251001' to reduce cost. Requires anthropic SDK."
         ),
     )
 

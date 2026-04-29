@@ -88,7 +88,9 @@ def _instantiate_all_tools(backend: str = "claude_agent_sdk") -> list[BaseTool]:
     return tools
 
 
-def build_openai_function_tools(settings: Any, backend: str = "openai_agents") -> list:
+def build_openai_function_tools(
+    settings: Any, backend: str = "openai_agents", policy: ToolPolicy | None = None
+) -> list:
     """Build a list of OpenAI Agents SDK ``FunctionTool`` wrappers for PocketPaw tools.
 
     Each tool is wrapped in a FunctionTool whose ``on_invoke_tool`` callback
@@ -108,11 +110,12 @@ def build_openai_function_tools(settings: Any, backend: str = "openai_agents") -
         logger.debug("OpenAI Agents SDK not installed — returning empty tools list")
         return []
 
-    policy = ToolPolicy(
-        profile=settings.tool_profile,
-        allow=settings.tools_allow,
-        deny=settings.tools_deny,
-    )
+    if policy is None:
+        policy = ToolPolicy(
+            profile=settings.tool_profile,
+            allow=settings.tools_allow,
+            deny=settings.tools_deny,
+        )
 
     registry = ToolRegistry(policy=policy)
     for tool in _instantiate_all_tools(backend=backend):
@@ -186,7 +189,9 @@ def _make_invoke_callback(tool: Any):
     return callback
 
 
-def build_adk_function_tools(settings: Any, backend: str = "google_adk") -> list:
+def build_adk_function_tools(
+    settings: Any, backend: str = "google_adk", policy: ToolPolicy | None = None
+) -> list:
     """Build a list of Google ADK ``FunctionTool`` wrappers for PocketPaw tools.
 
     ADK accepts plain Python callables as tools via ``FunctionTool(func=...)``.
@@ -207,11 +212,12 @@ def build_adk_function_tools(settings: Any, backend: str = "google_adk") -> list
         logger.debug("Google ADK not installed — returning empty tools list")
         return []
 
-    policy = ToolPolicy(
-        profile=settings.tool_profile,
-        allow=settings.tools_allow,
-        deny=settings.tools_deny,
-    )
+    if policy is None:
+        policy = ToolPolicy(
+            profile=settings.tool_profile,
+            allow=settings.tools_allow,
+            deny=settings.tools_deny,
+        )
 
     registry = ToolRegistry(policy=policy)
     for tool in _instantiate_all_tools(backend=backend):
@@ -275,7 +281,9 @@ def _make_adk_wrapper(tool: Any):
     return _adk_tool_wrapper
 
 
-def build_deep_agents_tools(settings: Any, backend: str = "deep_agents") -> list:
+def build_deep_agents_tools(
+    settings: Any, backend: str = "deep_agents", policy: ToolPolicy | None = None
+) -> list:
     """Build a list of LangChain ``StructuredTool`` wrappers for PocketPaw tools.
 
     Deep Agents accepts LangChain tools, plain callables, or dicts. We use
@@ -295,11 +303,12 @@ def build_deep_agents_tools(settings: Any, backend: str = "deep_agents") -> list
         logger.debug("langchain-core not installed — returning empty tools list")
         return []
 
-    policy = ToolPolicy(
-        profile=settings.tool_profile,
-        allow=settings.tools_allow,
-        deny=settings.tools_deny,
-    )
+    if policy is None:
+        policy = ToolPolicy(
+            profile=settings.tool_profile,
+            allow=settings.tools_allow,
+            deny=settings.tools_deny,
+        )
 
     registry = ToolRegistry(policy=policy)
     for tool in _instantiate_all_tools(backend=backend):
@@ -392,7 +401,12 @@ def get_tool_instructions_compact(settings: Any, backend: str = "opencode") -> s
         "# PocketPaw Tools",
         "",
         "You have access to the following PocketPaw tools.",
-        "To use a tool, run: `python -m pocketpaw.tools.cli <tool_name> '<json_args>'`",
+        "To use a tool, pipe JSON via stdin (avoids bash $-expansion issues):",
+        "```",
+        "echo '<json_args>' | python -m pocketpaw.tools.cli <tool_name>",
+        "```",
+        "IMPORTANT: Always use single quotes around JSON to prevent bash from",
+        "expanding $ signs in values like prices ($74.30) or currency amounts.",
         "",
     ]
     for tool_name in sorted(allowed):

@@ -7,7 +7,6 @@ This module provides a secondary LLM check for dangerous actions.
 
 import logging
 
-from pocketpaw.config import get_settings
 from pocketpaw.security.audit import AuditEvent, AuditSeverity, get_audit_logger
 from pocketpaw.security.rails import COMPILED_DANGEROUS_PATTERNS
 
@@ -52,6 +51,8 @@ Respond with valid JSON only:
 """
 
     def __init__(self):
+        from pocketpaw.config import get_settings
+
         self.settings = get_settings()
         self.client = None
         self._audit = get_audit_logger()
